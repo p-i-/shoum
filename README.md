@@ -43,7 +43,8 @@ gesture.
 ## Requirements
 
 - Apple Silicon Mac, macOS 13.0+
-- Xcode (for building; Command Line Tools alone can't build the .app)
+- Xcode Command Line Tools (`xcode-select --install`) — no Xcode needed;
+  the app builds with plain `swiftc`
 - cmake
 - ~4GB disk (whisper.cpp + models), ~2GB RAM while running
 
@@ -117,6 +118,10 @@ The app is built to be diagnosable without a debugger:
   it reopens itself if a check fails.
 
 ## Architecture
+
+No Xcode project: `build.sh` compiles `SpeakApp/SpeakApp/*.swift` with
+swiftc, assembles the bundle, and ad-hoc signs it. Adding a source file means
+dropping it in that directory — nothing to register anywhere.
 
 ```
 SpeakApp (Swift, menu bar, LSUIElement)

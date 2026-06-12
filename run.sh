@@ -1,7 +1,7 @@
 #!/bin/bash
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-APP_PATH="$SCRIPT_DIR/build/Build/Products/Debug/SpeakApp.app"
+APP_PATH="$SCRIPT_DIR/build/SpeakApp.app"
 BINARY="$APP_PATH/Contents/MacOS/SpeakApp"
 
 if [ ! -d "$APP_PATH" ]; then
