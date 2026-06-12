@@ -9,6 +9,8 @@ enum SpeakState {
 
 protocol AppStateDelegate: AnyObject {
     func appStateDidChange(to state: SpeakState)
+    /// User gestured before the system is ready — surface the splash.
+    func appStateNeedsAttention()
 }
 
 class AppStateCoordinator: KeyMonitorDelegate {
@@ -16,6 +18,10 @@ class AppStateCoordinator: KeyMonitorDelegate {
 
     private(set) var currentState: SpeakState = .idle {
         didSet {
+            // Only in editing do tap (paste) and double-tap (new chunk) both
+            // apply, so only there must single taps wait out the double-tap
+            // window. Everywhere else taps fire instantly.
+            keyMonitor.disambiguatesTaps = (currentState == .editing)
             delegate?.appStateDidChange(to: currentState)
         }
     }
@@ -25,29 +31,45 @@ class AppStateCoordinator: KeyMonitorDelegate {
     private let overlayWindow = OverlayWindow()
     private let clipboardManager = ClipboardManager()
     private let keyMonitor = KeyMonitor()
+    private let serverManager = ServerManager()
+    let readiness = ReadinessChecker()
 
     // Track if escape key monitor is active
     private var escapeMonitor: Any?
 
+    private var recordingStartTime: TimeInterval?
+
     init() {
         keyMonitor.delegate = self
+        audioRecorder.onBuffer = { [weak self] samples, sampleRate in
+            self?.overlayWindow.spectrogram.push(samples, sampleRate: sampleRate)
+        }
     }
 
     func start() {
-        keyMonitor.start()
+        serverManager.start()
+        let hotkeyOK = keyMonitor.start()
         setupEscapeKeyMonitor()
+        audioRecorder.prepare()
+        readiness.run(recorder: audioRecorder, hotkeyOK: hotkeyOK)
     }
 
     func stop() {
         keyMonitor.stop()
         removeEscapeKeyMonitor()
+        serverManager.stop()
     }
 
     // MARK: - KeyMonitorDelegate
 
-    func keyMonitorDidDetectHoldStart() {
+    func keyMonitorDidDetectDoubleTap() {
         switch currentState {
         case .idle:
+            guard readiness.isReady else {
+                NSLog("[AppState] double-tap before ready - showing status")
+                delegate?.appStateNeedsAttention()
+                return
+            }
             startRecording(isFirstChunk: true)
         case .editing:
             startRecording(isFirstChunk: false)
@@ -57,14 +79,20 @@ class AppStateCoordinator: KeyMonitorDelegate {
         }
     }
 
-    func keyMonitorDidDetectHoldEnd() {
-        guard currentState == .recording else { return }
-        stopRecordingAndTranscribe()
+    func keyMonitorDidDetectTap() {
+        switch currentState {
+        case .recording:
+            stopRecordingAndTranscribe()
+        case .editing:
+            confirmAndPaste()
+        case .idle, .processing:
+            break
+        }
     }
 
-    func keyMonitorDidDetectTap() {
-        guard currentState == .editing else { return }
-        confirmAndPaste()
+    func keyMonitorDidDetectHoldRelease() {
+        guard currentState == .recording else { return }
+        stopRecordingAndTranscribe()
     }
 
     // MARK: - Private Methods
@@ -75,12 +103,16 @@ class AppStateCoordinator: KeyMonitorDelegate {
         }
 
         playSound(.start)
-        overlayWindow.showWithStatus("Recording...")
+        overlayWindow.showRecording()
 
         do {
             try audioRecorder.startRecording()
+            recordingStartTime = ProcessInfo.processInfo.systemUptime
+            NSLog("[AppState] ▶ RECORDING STARTED (%@)", isFirstChunk ? "first chunk" : "additional chunk")
             currentState = .recording
         } catch {
+            NSLog("[AppState] recording FAILED to start: \(error.localizedDescription)")
+            overlayWindow.finish(with: nil)
             showError("Failed to start recording: \(error.localizedDescription)")
             if isFirstChunk {
                 overlayWindow.hide()
@@ -90,9 +122,12 @@ class AppStateCoordinator: KeyMonitorDelegate {
     }
 
     private func stopRecordingAndTranscribe() {
+        let duration = recordingStartTime.map { ProcessInfo.processInfo.systemUptime - $0 } ?? 0
+        recordingStartTime = nil
+        NSLog("[AppState] ■ RECORDING STOPPED after %.2fs -> transcribing", duration)
         let wavURL = audioRecorder.stopRecording()
         playSound(.stop)
-        overlayWindow.showWithStatus("Processing...")
+        overlayWindow.markProcessing()
         currentState = .processing
 
         transcriber.transcribe(wavFile: wavURL) { [weak self] result in
@@ -111,20 +146,22 @@ class AppStateCoordinator: KeyMonitorDelegate {
     }
 
     private func handleTranscriptionSuccess(_ text: String) {
+        NSLog("[AppState] transcription OK: %d chars: \"%@\"", text.count, String(text.prefix(80)))
         playSound(.success)
 
-        // Copy to clipboard and paste into overlay at cursor position
+        // Copy to clipboard; the 🧠 marker becomes the transcribed text
         clipboardManager.copyToClipboard(text)
-        overlayWindow.insertTextAtCursor(text)
+        overlayWindow.finish(with: text)
 
         currentState = .editing
     }
 
     private func handleTranscriptionError(_ error: Error) {
+        NSLog("[AppState] transcription FAILED: \(error.localizedDescription)")
+        overlayWindow.finish(with: nil)
         if case Transcriber.TranscriberError.emptyTranscription = error {
-            // Empty transcription - just go to editing state without changing text
+            // Empty transcription - the marker just disappears
             playSound(.subtle)
-            overlayWindow.showWithStatus("")
             overlayWindow.show()
         } else {
             playSound(.error)
@@ -137,10 +174,21 @@ class AppStateCoordinator: KeyMonitorDelegate {
         let text = overlayWindow.getText()
         guard !text.isEmpty else {
             overlayWindow.hide()
+            clipboardManager.refocusRememberedApp()
             currentState = .idle
             return
         }
 
+        if Config.shared.pasteMode == "copy" {
+            NSLog("[AppState] copying %d chars to clipboard (paste_mode: copy)", text.count)
+            clipboardManager.copyToClipboard(text)
+            overlayWindow.hide()
+            clipboardManager.refocusRememberedApp()
+            currentState = .idle
+            return
+        }
+
+        NSLog("[AppState] pasting %d chars to previous app", text.count)
         clipboardManager.pasteToRememberedApp(text)
 
         // Hide overlay after a brief delay to ensure paste completes
@@ -151,7 +199,9 @@ class AppStateCoordinator: KeyMonitorDelegate {
     }
 
     private func dismiss() {
+        NSLog("[AppState] dismissed (escape)")
         overlayWindow.hide()
+        clipboardManager.refocusRememberedApp()
         currentState = .idle
     }
 
@@ -185,6 +235,7 @@ class AppStateCoordinator: KeyMonitorDelegate {
     }
 
     private func playSound(_ type: SoundType) {
+        guard Config.shared.sounds else { return }
         let soundName: NSSound.Name
         switch type {
         case .start:

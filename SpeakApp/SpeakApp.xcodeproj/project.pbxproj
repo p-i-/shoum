@@ -15,6 +15,11 @@
 		A10000001000000000000006 /* KeyMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000002000000000000006 /* KeyMonitor.swift */; };
 		A10000001000000000000007 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000002000000000000007 /* AppState.swift */; };
 		A10000001000000000000008 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000200000000000000A /* main.swift */; };
+		A10000001000000000000009 /* ServerManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000200000000000000B /* ServerManager.swift */; };
+		A1000000100000000000000A /* Config.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000200000000000000C /* Config.swift */; };
+		A1000000100000000000000B /* ReadinessChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000200000000000000D /* ReadinessChecker.swift */; };
+		A1000000100000000000000C /* SplashWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000200000000000000E /* SplashWindow.swift */; };
+		A1000000100000000000000D /* SpectrogramView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000200000000000000F /* SpectrogramView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -28,6 +33,11 @@
 		A10000002000000000000008 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A10000002000000000000009 /* SpeakApp.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = SpeakApp.entitlements; sourceTree = "<group>"; };
 		A1000000200000000000000A /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		A1000000200000000000000B /* ServerManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerManager.swift; sourceTree = "<group>"; };
+		A1000000200000000000000C /* Config.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Config.swift; sourceTree = "<group>"; };
+		A1000000200000000000000D /* ReadinessChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadinessChecker.swift; sourceTree = "<group>"; };
+		A1000000200000000000000E /* SplashWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplashWindow.swift; sourceTree = "<group>"; };
+		A1000000200000000000000F /* SpectrogramView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpectrogramView.swift; sourceTree = "<group>"; };
 		A10000003000000000000001 /* SpeakApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SpeakApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -60,6 +70,11 @@
 				A10000002000000000000006 /* KeyMonitor.swift */,
 				A10000002000000000000004 /* OverlayWindow.swift */,
 				A10000002000000000000003 /* Transcriber.swift */,
+				A1000000200000000000000B /* ServerManager.swift */,
+				A1000000200000000000000C /* Config.swift */,
+				A1000000200000000000000D /* ReadinessChecker.swift */,
+				A1000000200000000000000E /* SplashWindow.swift */,
+				A1000000200000000000000F /* SpectrogramView.swift */,
 				A1000000200000000000000A /* main.swift */,
 				A10000002000000000000008 /* Info.plist */,
 				A10000002000000000000009 /* SpeakApp.entitlements */,
@@ -151,6 +166,11 @@
 				A10000001000000000000006 /* KeyMonitor.swift in Sources */,
 				A10000001000000000000007 /* AppState.swift in Sources */,
 				A10000001000000000000008 /* main.swift in Sources */,
+				A10000001000000000000009 /* ServerManager.swift in Sources */,
+				A1000000100000000000000A /* Config.swift in Sources */,
+				A1000000100000000000000B /* ReadinessChecker.swift in Sources */,
+				A1000000100000000000000C /* SplashWindow.swift in Sources */,
+				A1000000100000000000000D /* SpectrogramView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

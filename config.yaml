@@ -1,0 +1,15 @@
+# Speak configuration — flat key: value pairs only, restart the app to apply.
+# Delete a line to use its built-in default.
+
+model: medium.en              # which whisper.cpp/models/ggml-<model>.bin to load
+use_ane: true                 # true = CoreML/Neural Engine build, false = Metal only
+server_port: 8178
+server_args:                  # extra whisper-server flags, space-separated (e.g. -t 6)
+
+double_tap_window_ms: 350     # max gap between taps to count as a double-tap
+tap_max_ms: 250               # presses longer than this aren't taps
+hold_release_ms: 400          # double-tap-and-hold at least this long: release stops recording
+hotkey_keycode: 56            # 56 = left shift, 60 = right shift
+
+sounds: true                  # audio feedback (Tink/Pop/Glass)
+paste_mode: paste             # paste = switch to previous app and Cmd+V; copy = clipboard only

@@ -1,24 +1,28 @@
 import Cocoa
 
-class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessDelegate {
     private var statusItem: NSStatusItem!
     private var appStateCoordinator: AppStateCoordinator!
+    private var splash: SplashWindow!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSLog("[SpeakApp] Starting up...")
 
-        // Check for accessibility permissions
+        // Check for accessibility permissions (prompts on first run)
         checkAccessibilityPermissions()
 
         // Set up status item
         setupStatusItem()
-        NSLog("[SpeakApp] Status item created")
 
-        // Initialize app state coordinator
+        splash = SplashWindow()
+        splash.show()
+
+        // Initialize app state coordinator; its ReadinessChecker drives the splash
         appStateCoordinator = AppStateCoordinator()
         appStateCoordinator.delegate = self
+        appStateCoordinator.readiness.delegate = self
         appStateCoordinator.start()
-        NSLog("[SpeakApp] Ready - hold left-shift to record")
+        NSLog("[SpeakApp] Startup checks running")
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -31,29 +35,57 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
 
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "waveform.circle", accessibilityDescription: "Speak")
+            button.image = NSImage(systemSymbolName: "hourglass.circle", accessibilityDescription: "Speak (starting)")
         }
 
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "Speak", action: nil, keyEquivalent: ""))
+        menu.addItem(NSMenuItem.separator())
+        menu.addItem(NSMenuItem(title: "Show Status…", action: #selector(showStatus), keyEquivalent: "s"))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q"))
 
         statusItem.menu = menu
     }
 
+    @objc private func showStatus() {
+        splash.show()
+    }
+
     @objc private func quit() {
         NSApp.terminate(nil)
+    }
+
+    private func setStatusIcon(_ symbolName: String, _ description: String) {
+        statusItem?.button?.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: description)
+    }
+
+    // MARK: - ReadinessDelegate
+
+    func readinessDidUpdate(_ item: CheckItem, state: CheckState) {
+        let readiness = appStateCoordinator.readiness
+        splash.update(item, state: state)
+        splash.setControlsVisible(readiness.allResolved)
+        if readiness.anyFailed {
+            splash.markFailed()
+            setStatusIcon("xmark.circle", "Speak (problem)")
+            // A failure should be seen even if the splash was closed
+            if !splash.isVisible { splash.show() }
+        } else if !readiness.isReady {
+            setStatusIcon("hourglass.circle", "Speak (starting)")
+        }
+    }
+
+    func readinessDidBecomeReady() {
+        splash.markReady(autoCloseAllowed: !appStateCoordinator.readiness.anyFailed)
+        setStatusIcon("waveform.circle", "Speak")
     }
 
     // MARK: - AppStateDelegate
 
     func appStateDidChange(to state: SpeakState) {
-        updateStatusItemIcon(for: state)
-    }
-
-    private func updateStatusItemIcon(for state: SpeakState) {
-        guard let button = statusItem?.button else { return }
+        // Until ready, the icon belongs to the readiness flow
+        guard appStateCoordinator.readiness.isReady else { return }
 
         let symbolName: String
         switch state {
@@ -66,8 +98,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate {
         case .editing:
             symbolName = "pencil.circle"
         }
+        setStatusIcon(symbolName, "Speak")
+    }
 
-        button.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: "Speak")
+    func appStateNeedsAttention() {
+        splash.show()
     }
 
     // MARK: - Permissions
@@ -75,11 +110,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate {
     private func checkAccessibilityPermissions() {
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
         let trusted = AXIsProcessTrustedWithOptions(options as CFDictionary)
-
-        if trusted {
-            NSLog("[SpeakApp] Accessibility: GRANTED")
-        } else {
-            NSLog("[SpeakApp] Accessibility: NOT GRANTED - Please enable in System Settings > Privacy & Security > Accessibility")
-        }
+        NSLog("[SpeakApp] Accessibility: \(trusted ? "GRANTED" : "NOT GRANTED")")
     }
 }

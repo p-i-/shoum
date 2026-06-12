@@ -14,6 +14,12 @@ class ClipboardManager {
         pasteboard.setString(text, forType: .string)
     }
 
+    /// Give keyboard focus back to whatever app was frontmost before the
+    /// overlay appeared (used when dismissing without pasting).
+    func refocusRememberedApp() {
+        rememberedApp?.activate(options: [.activateIgnoringOtherApps])
+    }
+
     func pasteToRememberedApp(_ text: String) {
         copyToClipboard(text)
 
