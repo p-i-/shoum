@@ -24,7 +24,7 @@ class OverlayWindow {
 
     init() {
         // Create panel
-        let panelRect = NSRect(x: 0, y: 0, width: 500, height: 200)
+        let panelRect = NSRect(x: 0, y: 0, width: 750, height: 300)
         panel = NSPanel(
             contentRect: panelRect,
             styleMask: [.titled, .fullSizeContentView],
@@ -41,12 +41,16 @@ class OverlayWindow {
         panel.isMovableByWindowBackground = true
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        // No window-level alphaValue: it flattens the .hudWindow vibrancy into
+        // plain transparency. Letting the material do the work gives a proper
+        // frosted-glass look — translucent *and* blurring the backdrop.
 
         // Visual effect view for background
         visualEffectView = NSVisualEffectView(frame: panelRect)
-        visualEffectView.material = .hudWindow
+        visualEffectView.material = .popover
         visualEffectView.state = .active
         visualEffectView.blendingMode = .behindWindow
+        visualEffectView.alphaValue = 0.8 // ~20% see-through layered on top of the frost
         visualEffectView.wantsLayer = true
         visualEffectView.layer?.cornerRadius = 12
         visualEffectView.layer?.masksToBounds = true
@@ -74,7 +78,8 @@ class OverlayWindow {
         scrollView.documentView = textView
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
-        scrollView.autohidesScrollers = true
+        scrollView.autohidesScrollers = false
+        scrollView.scrollerStyle = .legacy // persistent visible bar when text overflows
         scrollView.drawsBackground = false
         scrollView.translatesAutoresizingMaskIntoConstraints = false
 
@@ -150,20 +155,33 @@ class OverlayWindow {
         }
 
         let full = storage.string as NSString
-        let replacement: String
-        if let text = text {
-            replacement = Self.smartJoin(
-                chunk: text,
-                left: full.substring(to: range.location),
-                right: full.substring(from: range.location + range.length),
-                replaced: replacedSelectionText)
-        } else {
-            replacement = ""
+        let left = full.substring(to: range.location)
+        let right = full.substring(from: range.location + range.length)
+
+        // Put the pre-recording selection back under the marker directly (kept off
+        // the undo stack); the change registered below is the single undoable step
+        // "what the user had" -> "the dictated chunk", so one Cmd+Z reverts a chunk.
+        storage.replaceCharacters(
+            in: range, with: NSAttributedString(string: replacedSelectionText, attributes: textAttributes()))
+        let restored = NSRange(location: range.location, length: (replacedSelectionText as NSString).length)
+
+        guard let text = text else {
+            // Transcription failed/empty: leave the original selection in place
+            // rather than deleting it along with the marker.
+            textView.setSelectedRange(NSRange(location: range.location + restored.length, length: 0))
+            return
         }
 
-        storage.replaceCharacters(
-            in: range, with: NSAttributedString(string: replacement, attributes: textAttributes()))
-        textView.setSelectedRange(NSRange(location: range.location + (replacement as NSString).length, length: 0))
+        let replacement = Self.smartJoin(
+            chunk: text, left: left, right: right, replaced: replacedSelectionText)
+        if textView.shouldChangeText(in: restored, replacementString: replacement) {
+            storage.replaceCharacters(
+                in: restored, with: NSAttributedString(string: replacement, attributes: textAttributes()))
+            textView.didChangeText()
+        }
+        let cursor = NSRange(location: range.location + (replacement as NSString).length, length: 0)
+        textView.setSelectedRange(cursor)
+        textView.scrollRangeToVisible(cursor)
     }
 
     /// Whisper emits each chunk as a standalone sentence ("Putting it through
@@ -239,12 +257,15 @@ class OverlayWindow {
     func insertTextAtCursor(_ text: String) {
         show()
         let selectedRange = textView.selectedRange()
-        if let textStorage = textView.textStorage {
+        if let textStorage = textView.textStorage,
+           textView.shouldChangeText(in: selectedRange, replacementString: text) {
             let attributedText = NSAttributedString(string: text, attributes: textAttributes())
             textStorage.replaceCharacters(in: selectedRange, with: attributedText)
-            let newCursorPosition = selectedRange.location + (text as NSString).length
-            textView.setSelectedRange(NSRange(location: newCursorPosition, length: 0))
+            textView.didChangeText()
         }
+        let cursor = NSRange(location: selectedRange.location + (text as NSString).length, length: 0)
+        textView.setSelectedRange(cursor)
+        textView.scrollRangeToVisible(cursor)
     }
 
     // MARK: - Marker internals

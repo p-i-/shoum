@@ -205,12 +205,47 @@ class AppStateCoordinator: KeyMonitorDelegate {
         currentState = .idle
     }
 
+    /// ESC while recording: stop the mic, discard the audio (no transcription),
+    /// drop the recording marker but keep any text already in the box, and land
+    /// in editing — so a second ESC then closes the box.
+    private func cancelRecording() {
+        recordingStartTime = nil
+        let wavURL = audioRecorder.stopRecording()
+        try? FileManager.default.removeItem(at: wavURL)
+        NSLog("[AppState] recording cancelled (escape)")
+        playSound(.subtle)
+        overlayWindow.finish(with: nil) // removes the marker, restores any selection
+        currentState = .editing
+    }
+
     private func setupEscapeKeyMonitor() {
         escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self = self else { return event }
 
-            if event.keyCode == 53 && self.currentState == .editing { // 53 = Escape
-                self.dismiss()
+            if event.keyCode == 53 { // 53 = Escape
+                if self.currentState == .recording {
+                    self.cancelRecording() // first ESC: abort the in-progress recording
+                    return nil
+                }
+                if self.currentState == .editing {
+                    self.dismiss() // ESC with no active recording: close the box
+                    return nil
+                }
+            }
+
+            // Cmd+Z / Cmd+Shift+Z → undo/redo in the dictation box. This is an
+            // accessory app with no Edit menu, so the standard Cmd+Z key
+            // equivalent is never dispatched to undo: — route it to the box's
+            // own undo manager here, the same way Escape is handled.
+            if self.currentState == .editing,
+               event.modifierFlags.contains(.command),
+               event.charactersIgnoringModifiers?.lowercased() == "z" {
+                let undoManager = self.overlayWindow.textView.undoManager
+                if event.modifierFlags.contains(.shift) {
+                    undoManager?.redo()
+                } else {
+                    undoManager?.undo()
+                }
                 return nil // Consume the event
             }
             return event

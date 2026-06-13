@@ -124,7 +124,11 @@ class Transcriber {
                     || (line.hasPrefix("(") && line.hasSuffix(")"))
                 return !isAnnotation
             }
-        return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        let joined = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        // Whisper sometimes emits a spurious leading "." (or "...") when an
+        // utterance opens with a brief silence — strip leading dots/whitespace so
+        // chunks don't start with a stray full stop (see log.txt: ". I think…").
+        return String(joined.drop(while: { $0 == "." || $0 == "…" || $0.isWhitespace }))
     }
 
     enum TranscriberError: LocalizedError {
