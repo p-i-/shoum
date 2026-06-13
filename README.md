@@ -18,6 +18,42 @@ Yes, one modifier key carries the whole app. Normal shift use (capitals,
 shift-click) never triggers anything: any intervening keystroke cancels the
 gesture.
 
+## Why not just use macOS dictation (or Claude Code's voice input)?
+
+If you dictate to Claude Code on macOS, the two stock options both get in the
+way of technical work.
+
+**macOS built-in dictation** types straight into whatever control is focused,
+and three problems compound:
+
+- It mishears domain vocabulary — "Gaussian", "transformer", "tokenizer" come
+  out wrong, so you spend half your time correcting it.
+- It targets the OS's focused text field directly, but macOS has many kinds of
+  text input; dictation works in some and silently not in others.
+- The dictation daemon sporadically wedges, with no reliable way to reset it
+  short of a reboot — painful when you have long-running work (a Dockerized VM,
+  say) you don't want to kill.
+
+**Claude Code's own voice input** is over-eager: it commits every short phrase
+as you speak, so you ping-pong between watching the output and holding onto
+your next thought — it interrupts the very train of thought you're trying to
+get down.
+
+**Speak fixes the shape of the interaction.** Everything you say lands first in
+a private floating box that *you* own:
+
+- You speak a whole thought (or several chunks), read it back, and edit it
+  freely — nothing reaches Claude until you single-tap to paste. No premature
+  insertion, no interruption of your flow.
+- The result is pasted with ⌘V, so it works in every input surface, not "some
+  but not others".
+- `prompt.txt` biases whisper toward your jargon, so "Gaussian" and
+  "transformer" come out right.
+- The whisper server is a child process this app owns and restarts on crash —
+  no opaque daemon you can't reset.
+
+The whole interface is one key (left shift), and you decide when the text lands.
+
 ## Features
 
 - **Resident whisper-server** — the model loads once at launch, not per
@@ -38,7 +74,7 @@ gesture.
 - **Domain vocabulary** — `prompt.txt` biases transcription toward your
   jargon (default: AI/ML engineering terms).
 - **Multi-chunk dictation** — keep double-tapping to add chunks at the
-  cursor; edit freely in between.
+  cursor; edit freely in between, and ⌘Z undoes a dictated chunk.
 
 ## Requirements
 
@@ -159,30 +195,16 @@ Hard-won lessons encoded in this design (do not regress these):
 
 ## Roadmap / TODO
 
-- **LLM "jiggle"**: long-press shift (release between ~0.2–0.5s, only valid
-  because intervening keystrokes already cancel — so holding shift to type a
-  capital never fires it) sends the box text + cursor marker to a local LLM
-  (llama-server, same resident pattern) for whole-text repair: spoken
-  punctuation ("comma", "full stop"), capitalization, flubs. Same channel
-  handles spoken commands ("command: reformat as a list"). Must be
-  cancellable (ESC) and undoable. Config: `llm_url` (OpenAI-compatible) so
-  local/cloud is one knob.
-- **Proper .app distribution**: Release build, Developer ID signing +
-  notarization, model download on first run (host the CoreML encoder as a
-  release artifact — end users should never need the python conversion env),
-  paths moved from repo-relative to ~/Library/Application Support, logs to
-  ~/Library/Logs, "Start at login" via SMAppService. Then a Homebrew cask in
-  a personal tap.
-- **Gesture state machine extraction** — pure `(event, time) → action`
-  function with replay tests from recorded traces (log.txt format already
-  captures them).
-- **`tools/doctor.sh`** — the full atomic diagnostic suite for bug reports
-  (the splash covers the interactive case).
-- **Spoken-punctuation mode** — a punctuation-free variant of prompt.txt
-  biases whisper away from auto-punctuation, for those who dictate
-  punctuation explicitly.
-- Cancellable Transcriber (ESC during processing currently can't abort the
-  in-flight request).
+See [TODO.md](TODO.md) for the full forward path with rationale. In short:
+
+- **Homebrew distribution** (active next project) — `brew install
+  p-i-/tap/speak`, compile-from-source formula, Apple Silicon only, CoreML
+  encoder hosted as a release artifact so users never run the python
+  conversion. No Apple Developer account needed.
+- **LLM "jiggle"** — long-press shift to send the whole box to a local LLM
+  for repair (spoken punctuation, capitalization, flubs) and spoken commands.
+- Smaller debts: cancellable Transcriber, gesture state-machine extraction +
+  replay tests, `tools/doctor.sh`, spoken-punctuation mode.
 
 ## License / credits
 
