@@ -1,15 +1,44 @@
-# Speak configuration — flat key: value pairs only, restart the app to apply.
-# Delete a line to use its built-in default.
+# Speak configuration.
+# Flat `key: value` pairs only. Restart the app to apply.
+# Delete a line to fall back to its built-in default.
+# Comments stay on their own lines so the in-app Settings editor can rewrite a
+# single value without clobbering them.
 
-model: medium.en              # which whisper.cpp/models/ggml-<model>.bin to load
-use_ane: true                 # true = CoreML/Neural Engine build, false = Metal only
+# Which whisper model to load (whisper.cpp/models/ggml-<model>.bin).
+model: medium.en
+
+# Where the heavy model assets (the .bin and its ANE encoder) live.
+# Empty = the shared default, ~/Library/Application Support/Speak/models, which
+# both the dev build and the installed app reuse so the ~2 GB is never
+# duplicated. Set an absolute path to relocate them (e.g. an external drive).
+model_dir: 
+
+# CoreML/Neural Engine build (true) vs Metal only (false).
+use_ane: true
+
+# whisper-server port (localhost only).
 server_port: 8178
-server_args:                  # extra whisper-server flags, space-separated (e.g. -t 6)
 
-double_tap_window_ms: 350     # max gap between taps to count as a double-tap
-tap_max_ms: 250               # presses longer than this aren't taps
-hold_release_ms: 400          # double-tap-and-hold at least this long: release stops recording
-hotkey_keycode: 56            # 56 = left shift, 60 = right shift
+# Extra whisper-server flags, space-separated (e.g. -t 6).
+server_args:
 
-sounds: true                  # audio feedback (Tink/Pop/Glass)
-paste_mode: paste             # paste = switch to previous app and Cmd+V; copy = clipboard only
+# Logging verbosity: error | info | debug.
+log_level: info
+
+# Max gap between taps to count as a double-tap (ms).
+double_tap_window_ms: 350
+
+# Presses longer than this aren't taps (ms).
+tap_max_ms: 250
+
+# Double-tap-and-hold at least this long: release stops recording (ms).
+hold_release_ms: 400
+
+# Hotkey keycode: 56 = left shift, 60 = right shift.
+hotkey_keycode: 56
+
+# Audio feedback (Tink/Pop/Glass).
+sounds: true
+
+# paste = switch to previous app and Cmd+V; copy = clipboard only.
+paste_mode: paste

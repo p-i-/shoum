@@ -110,6 +110,13 @@ class OverlayWindow {
         ])
     }
 
+    /// Float above other apps (default) so the box appears over whatever you're
+    /// dictating into; temporarily drop to normal so the Settings window can
+    /// come in front of it.
+    func setFloating(_ floating: Bool) {
+        panel.level = floating ? .floating : .normal
+    }
+
     // MARK: - Visibility
 
     func show() {

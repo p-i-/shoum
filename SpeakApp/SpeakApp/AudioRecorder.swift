@@ -51,7 +51,7 @@ class AudioRecorder {
             try audioEngine.start()
         } catch {
             inputNode.removeTap(onBus: 0)
-            NSLog("[AudioRecorder] mic probe: engine start failed: \(error)")
+            Log.error("[AudioRecorder] mic probe: engine start failed: \(error)")
             completion(0, 0)
             return
         }
@@ -63,7 +63,7 @@ class AudioRecorder {
                 self.audioEngine.stop()
                 self.audioEngine.prepare()
             }
-            NSLog("[AudioRecorder] mic probe: \(buffers) buffers, peak \(peak)")
+            Log.info("[AudioRecorder] mic probe: \(buffers) buffers, peak \(peak)")
             completion(buffers, peak)
         }
     }
@@ -142,11 +142,11 @@ class AudioRecorder {
                     do {
                         try audioFile.write(from: outputBuffer)
                     } catch {
-                        NSLog("[AudioRecorder] write error: \(error)")
+                        Log.error("[AudioRecorder] write error: \(error)")
                     }
                 }
             } else {
-                NSLog("[AudioRecorder] dropped buffer (status \(status.rawValue), err \(error?.localizedDescription ?? "none"))")
+                Log.debug("[AudioRecorder] dropped buffer (status \(status.rawValue), err \(error?.localizedDescription ?? "none"))")
             }
         }
 
@@ -172,7 +172,7 @@ class AudioRecorder {
 
         if let url = recordingURL,
            let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int {
-            NSLog("[AudioRecorder] Recorded \(size) bytes to \(url.lastPathComponent)")
+            Log.info("[AudioRecorder] Recorded \(size) bytes to \(url.lastPathComponent)")
         }
 
         return recordingURL ?? URL(fileURLWithPath: "/tmp/error.wav")

@@ -2,7 +2,8 @@ import Foundation
 
 /// Sends recorded WAV files to the resident whisper-server over localhost.
 class Transcriber {
-    private let inferenceURL = URL(string: "http://127.0.0.1:\(Config.shared.serverPort)/inference")!
+    // Derived from Config.shared so a live port change applies without recreating.
+    private var inferenceURL: URL { URL(string: "http://127.0.0.1:\(Config.shared.serverPort)/inference")! }
 
     /// How long to keep retrying while the server is still starting up.
     /// Cold CoreML model load under system load has been observed at ~26s.
@@ -35,14 +36,14 @@ class Transcriber {
                urlError.code == .cannotConnectToHost || urlError.code == .networkConnectionLost,
                Date() < deadline {
                 if attempt == 1 || attempt % 5 == 0 {
-                    NSLog("[Transcriber] server not reachable (attempt \(attempt)), retrying for up to %.0fs more", deadline.timeIntervalSinceNow)
+                    Log.info("[Transcriber] server not reachable (attempt \(attempt)), retrying for up to \(String(format: "%.0f", deadline.timeIntervalSinceNow))s more")
                 }
                 Thread.sleep(forTimeInterval: retryInterval)
                 continue
             }
 
             if attempt > 1 {
-                NSLog("[Transcriber] server reachable after \(attempt) attempts")
+                Log.info("[Transcriber] server reachable after \(attempt) attempts")
             }
             return result
         }
@@ -124,7 +125,10 @@ class Transcriber {
                     || (line.hasPrefix("(") && line.hasSuffix(")"))
                 return !isAnnotation
             }
-        let joined = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        // Join whisper's segments with a SPACE, not a newline: for continuous
+        // dictation its segment breaks (at pauses / the 30s window boundary) are
+        // artifacts, not intended paragraphs. Real breaks = separate chunks.
+        let joined = lines.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
         // Whisper sometimes emits a spurious leading "." (or "...") when an
         // utterance opens with a brief silence — strip leading dots/whitespace so
         // chunks don't start with a stray full stop (see log.txt: ". I think…").

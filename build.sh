@@ -18,7 +18,7 @@ mkdir -p "$APP/Contents/MacOS"
 echo "Compiling SpeakApp..."
 swiftc \
     -O \
-    -target arm64-apple-macos13.0 \
+    -target arm64-apple-macos14.0 \
     -o "$APP/Contents/MacOS/SpeakApp" \
     "$SRC_DIR"/*.swift
 
@@ -26,7 +26,7 @@ swiftc \
 sed -e 's/\$(EXECUTABLE_NAME)/SpeakApp/g' \
     -e 's/\$(PRODUCT_NAME)/SpeakApp/g' \
     -e 's/\$(PRODUCT_BUNDLE_IDENTIFIER)/com.local.SpeakApp/g' \
-    -e 's/\$(MACOSX_DEPLOYMENT_TARGET)/13.0/g' \
+    -e 's/\$(MACOSX_DEPLOYMENT_TARGET)/14.0/g' \
     "$SRC_DIR/Info.plist" > "$APP/Contents/Info.plist"
 plutil -lint -s "$APP/Contents/Info.plist"
 

@@ -7,19 +7,12 @@ class ServerManager {
     private var isStopping = false
 
     private var serverBinary: String? {
-        // Honor use_ane; fall back to whichever build exists.
-        let builds = Config.shared.useANE ? ["build-coreml", "build"] : ["build", "build-coreml"]
-        for build in builds {
-            let path = Config.rootPath("whisper.cpp/\(build)/bin/whisper-server")
-            if FileManager.default.isExecutableFile(atPath: path) {
-                return path
-            }
-        }
-        return nil
+        let path = Config.serverBinaryPath
+        return FileManager.default.isExecutableFile(atPath: path) ? path : nil
     }
 
     private var prompt: String {
-        let promptPath = Config.rootPath("prompt.txt")
+        let promptPath = Config.promptFilePath
         if let text = try? String(contentsOfFile: promptPath, encoding: .utf8) {
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty { return trimmed }
@@ -38,15 +31,30 @@ class ServerManager {
         process = nil
     }
 
+    /// Relaunch to pick up changed engine settings (model, model_dir, use_ane,
+    /// port, args, prompt). In-process consumers already read the reloaded
+    /// Config; only this external process must be replaced. We clear the old
+    /// termination handler so killing it doesn't trigger the crash-restart path.
+    func restart() {
+        if let p = process {
+            p.terminationHandler = nil
+            p.terminate()
+        }
+        process = nil
+        isStopping = false
+        killStaleServers()
+        launch()
+    }
+
     private func launch() {
         guard let binary = serverBinary else {
-            NSLog("[ServerManager] No whisper-server binary found under \(Config.speakRoot)/whisper.cpp")
+            Log.error("[ServerManager] No whisper-server binary at \(Config.serverBinaryPath)")
             return
         }
 
-        let model = Config.rootPath("whisper.cpp/models/ggml-\(Config.shared.model).bin")
+        let model = Config.modelPath
         guard FileManager.default.fileExists(atPath: model) else {
-            NSLog("[ServerManager] Model not found: \(model)")
+            Log.error("[ServerManager] Model not found: \(model)")
             return
         }
 
@@ -66,7 +74,7 @@ class ServerManager {
         // models/ggml-<model>-encoder.mlmodelc is picked up automatically.
 
         // Server output goes to server.log, truncated each launch
-        let serverLogPath = Config.rootPath("server.log")
+        let serverLogPath = Config.serverLogPath
         FileManager.default.createFile(atPath: serverLogPath, contents: nil)
         if let logHandle = FileHandle(forWritingAtPath: serverLogPath) {
             process.standardOutput = logHandle
@@ -78,7 +86,7 @@ class ServerManager {
 
         process.terminationHandler = { [weak self] proc in
             guard let self = self, !self.isStopping else { return }
-            NSLog("[ServerManager] whisper-server exited (status \(proc.terminationStatus)) - restarting in 2s")
+            Log.error("[ServerManager] whisper-server exited (status \(proc.terminationStatus)) - restarting in 2s")
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                 guard !self.isStopping else { return }
                 self.launch()
@@ -88,9 +96,9 @@ class ServerManager {
         do {
             try process.run()
             self.process = process
-            NSLog("[ServerManager] whisper-server started (pid \(process.processIdentifier), \(binary)), output -> server.log")
+            Log.info("[ServerManager] whisper-server started (pid \(process.processIdentifier), \(binary)), output -> server.log")
         } catch {
-            NSLog("[ServerManager] Failed to start whisper-server: \(error)")
+            Log.error("[ServerManager] Failed to start whisper-server: \(error)")
         }
     }
 

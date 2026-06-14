@@ -85,13 +85,25 @@ class ReadinessChecker {
         states.values.allSatisfy { $0.isOK || $0.isFailed }
     }
 
+    /// Accessibility was granted after launch and the event tap re-armed live;
+    /// flip both rows to ✅ (recomputes readiness → may become ready).
+    func markHotkeyArmed() {
+        set(.accessibility, .ok("granted"))
+        set(.hotkey, .ok("double-tap key \(Config.shared.hotkeyKeycode)"))
+    }
+
     func run(recorder: AudioRecorder, hotkeyOK: Bool) {
-        set(.accessibility, AXIsProcessTrusted()
+        // NOTE: CGEvent.tapCreate succeeds even WITHOUT Accessibility (the tap
+        // is created but dead), so tap-creation success is NOT a valid signal.
+        // Gate "hotkey armed" on actual Accessibility trust so a missing grant
+        // can't masquerade as ready (which painted the tray falsely green).
+        let accessible = AXIsProcessTrusted()
+        set(.accessibility, accessible
             ? .ok("granted")
-            : .failed("grant in System Settings → Privacy → Accessibility, then relaunch"))
-        set(.hotkey, hotkeyOK
+            : .failed("grant in System Settings → Privacy → Accessibility"))
+        set(.hotkey, (accessible && hotkeyOK)
             ? .ok("double-tap key \(Config.shared.hotkeyKeycode)")
-            : .failed("event tap refused — needs Accessibility permission"))
+            : .failed("needs Accessibility permission"))
         checkFiles()
         checkMic(recorder)
         startServerWatch()
@@ -106,7 +118,7 @@ class ReadinessChecker {
             && (states[.serverReady]?.isOK ?? false)
             && (states[.hotkey]?.isOK ?? false)
         if isReady && !wasReady {
-            NSLog("[Readiness] READY")
+            Log.info("[Readiness] READY")
             delegate?.readinessDidBecomeReady()
         }
     }
@@ -115,17 +127,16 @@ class ReadinessChecker {
 
     private func checkFiles() {
         let cfg = Config.shared
-        let build = cfg.useANE ? "build-coreml" : "build"
         var missing: [String] = []
 
-        if !FileManager.default.isExecutableFile(atPath: Config.rootPath("whisper.cpp/\(build)/bin/whisper-server")) {
-            missing.append("\(build)/bin/whisper-server")
+        if !FileManager.default.isExecutableFile(atPath: Config.serverBinaryPath) {
+            missing.append((Config.serverBinaryPath as NSString).lastPathComponent)
         }
-        if !FileManager.default.fileExists(atPath: Config.rootPath("whisper.cpp/models/ggml-\(cfg.model).bin")) {
-            missing.append("models/ggml-\(cfg.model).bin")
+        if !FileManager.default.fileExists(atPath: Config.modelPath) {
+            missing.append((Config.modelPath as NSString).lastPathComponent)
         }
-        if cfg.useANE && !FileManager.default.fileExists(atPath: Config.rootPath("whisper.cpp/models/ggml-\(cfg.model)-encoder.mlmodelc")) {
-            missing.append("models/ggml-\(cfg.model)-encoder.mlmodelc")
+        if cfg.useANE && !FileManager.default.fileExists(atPath: Config.encoderPath) {
+            missing.append((Config.encoderPath as NSString).lastPathComponent)
         }
 
         set(.files, missing.isEmpty
@@ -201,7 +212,7 @@ class ReadinessChecker {
             return
         }
 
-        guard let log = try? String(contentsOfFile: Config.rootPath("server.log"), encoding: .utf8) else { return }
+        guard let log = try? String(contentsOfFile: Config.serverLogPath, encoding: .utf8) else { return }
 
         if !(states[.serverModel]?.isOK ?? false), log.contains("model size    =") {
             set(.serverModel, .ok(String(format: "1.5 GB in %.1fs", elapsed)))
@@ -227,7 +238,7 @@ class ReadinessChecker {
 
     private func runInferenceRoundtrip() {
         set(.serverReady, .running("test inference…"))
-        let testWav = Config.rootPath("whisper.cpp/samples/jfk.wav")
+        let testWav = Config.samplePath
         guard FileManager.default.fileExists(atPath: testWav) else {
             // Degraded check: no sample audio available, settle for the port.
             pollPortUntilUp()

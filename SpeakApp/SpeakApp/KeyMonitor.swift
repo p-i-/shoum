@@ -22,6 +22,14 @@ class KeyMonitor {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
 
+    /// Whether the created tap is actually enabled (receiving events). A tap can
+    /// be CREATED without Accessibility permission but stays disabled/dead — so
+    /// this, not tap-creation success, is the real "is the hotkey live" signal.
+    var isTapEnabled: Bool {
+        guard let tap = eventTap else { return false }
+        return CGEvent.tapIsEnabled(tap: tap)
+    }
+
     // All times come from CGEvent.timestamp — stamped by the HID system at the
     // physical keypress. The tap's runloop source lives on the MAIN runloop, so
     // both delivery and processing can be delayed by main-thread work (window
@@ -33,16 +41,19 @@ class KeyMonitor {
     private var pendingTapTimer: Timer?
     private var engagedByThisPress = false
 
+    // Derived from Config.shared each read (single source of truth) so a live
+    // config reload applies with no caching/invalidation.
+
     /// A press longer than this is not a tap.
-    private let tapMaxDuration = TimeInterval(Config.shared.tapMaxMs) / 1000
+    private var tapMaxDuration: TimeInterval { TimeInterval(Config.shared.tapMaxMs) / 1000 }
     /// Max gap between a tap's release and the next press to count as a double-tap.
-    private let doubleTapWindow = TimeInterval(Config.shared.doubleTapWindowMs) / 1000
+    private var doubleTapWindow: TimeInterval { TimeInterval(Config.shared.doubleTapWindowMs) / 1000 }
     /// Holding the second press of a double-tap at least this long makes its
     /// release stop the recording (push-to-talk).
-    private let holdReleaseThreshold = TimeInterval(Config.shared.holdReleaseMs) / 1000
+    private var holdReleaseThreshold: TimeInterval { TimeInterval(Config.shared.holdReleaseMs) / 1000 }
 
     /// Which modifier key triggers gestures (56 = left shift, 60 = right shift)
-    private let hotkeyKeyCode = CGKeyCode(Config.shared.hotkeyKeycode)
+    private var hotkeyKeyCode: CGKeyCode { CGKeyCode(Config.shared.hotkeyKeycode) }
 
     // CGEvent.timestamp units differ across systems (mach ticks vs
     // nanoseconds). Calibrate once against the system clock instead of
@@ -63,11 +74,10 @@ class KeyMonitor {
             let machErr = abs(raw * machScale - uptime)
             let nsErr = abs(raw * nsScale - uptime)
             timestampScale = nsErr < machErr ? nsScale : machScale
-            NSLog("[KeyMonitor] timestamp units calibrated: %@ (event %.1fs vs uptime %.1fs)",
-                  nsErr < machErr ? "nanoseconds" : "mach ticks", raw * timestampScale, uptime)
+            Log.info("[KeyMonitor] timestamp units calibrated: \(nsErr < machErr ? "nanoseconds" : "mach ticks") (event \(String(format: "%.1f", raw * timestampScale))s vs uptime \(String(format: "%.1f", uptime))s)")
 
             if min(machErr, nsErr) > 60 {
-                NSLog("[KeyMonitor] WARNING: neither unit matches uptime; gesture timing may be wrong")
+                Log.error("[KeyMonitor] WARNING: neither unit matches uptime; gesture timing may be wrong")
             }
         }
 
@@ -75,7 +85,7 @@ class KeyMonitor {
     }
 
     @discardableResult
-    func start() -> Bool {
+    func start(quiet: Bool = false) -> Bool {
         // flagsChanged for shift itself, keyDown so intervening keystrokes
         // (shift used as a modifier, typing between taps) cancel tap gestures.
         let eventMask = (1 << CGEventType.flagsChanged.rawValue) | (1 << CGEventType.keyDown.rawValue)
@@ -92,7 +102,11 @@ class KeyMonitor {
             },
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         ) else {
-            NSLog("[KeyMonitor] FAILED to create event tap - Accessibility permissions required!")
+            if quiet {
+                Log.debug("[KeyMonitor] event tap not created yet (awaiting Accessibility)")
+            } else {
+                Log.error("[KeyMonitor] FAILED to create event tap - Accessibility permissions required!")
+            }
             return false
         }
 
@@ -101,7 +115,7 @@ class KeyMonitor {
         runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
-        NSLog("[KeyMonitor] Event tap created successfully")
+        Log.info("[KeyMonitor] Event tap created successfully")
         return true
     }
 
@@ -173,7 +187,7 @@ class KeyMonitor {
         // they're computed from hardware timestamps.
         let lag = (ProcessInfo.processInfo.systemUptime - now) * 1000
         if lag > 50 {
-            NSLog("[KeyMonitor] shift %@ processed %.0fms late (main thread was busy)", isPressed ? "down" : "up", lag)
+            Log.debug("[KeyMonitor] shift \(isPressed ? "down" : "up") processed \(String(format: "%.0f", lag))ms late (main thread was busy)")
         }
 
         if isPressed {
@@ -186,7 +200,7 @@ class KeyMonitor {
                 pendingTapTimer = nil
                 lastTapReleaseTime = nil
                 engagedByThisPress = true
-                NSLog("[KeyMonitor] double-tap (gap %.0fms) -> engage", (now - lastRelease) * 1000)
+                Log.debug("[KeyMonitor] double-tap (gap \(String(format: "%.0f", (now - lastRelease) * 1000))ms) -> engage")
                 delegate?.keyMonitorDidDetectDoubleTap()
             }
         } else {
@@ -200,10 +214,10 @@ class KeyMonitor {
                 // push-to-talk, so the release stops it.
                 engagedByThisPress = false
                 if duration >= holdReleaseThreshold {
-                    NSLog("[KeyMonitor] engaging press held %.0fms -> hold-release (stop)", duration * 1000)
+                    Log.debug("[KeyMonitor] engaging press held \(String(format: "%.0f", duration * 1000))ms -> hold-release (stop)")
                     delegate?.keyMonitorDidDetectHoldRelease()
                 } else {
-                    NSLog("[KeyMonitor] engaging press released after %.0fms -> toggle stays on", duration * 1000)
+                    Log.debug("[KeyMonitor] engaging press released after \(String(format: "%.0f", duration * 1000))ms -> toggle stays on")
                 }
                 return
             }
@@ -212,7 +226,7 @@ class KeyMonitor {
                 // Bare shift presses are gesture attempts; modifier use is
                 // ordinary typing and stays out of the log.
                 if !usedAsModifier {
-                    NSLog("[KeyMonitor] bare shift press %.0fms - too long for a tap (max %.0fms)", duration * 1000, tapMaxDuration * 1000)
+                    Log.debug("[KeyMonitor] bare shift press \(String(format: "%.0f", duration * 1000))ms - too long for a tap (max \(String(format: "%.0f", tapMaxDuration * 1000))ms)")
                 }
                 lastTapReleaseTime = nil
                 return
@@ -221,16 +235,16 @@ class KeyMonitor {
             lastTapReleaseTime = now
 
             if disambiguatesTaps {
-                NSLog("[KeyMonitor] tap (%.0fms), waiting %.0fms to rule out double-tap", duration * 1000, doubleTapWindow * 1000)
+                Log.debug("[KeyMonitor] tap (\(String(format: "%.0f", duration * 1000))ms), waiting \(String(format: "%.0f", doubleTapWindow * 1000))ms to rule out double-tap")
                 pendingTapTimer?.invalidate()
                 pendingTapTimer = Timer.scheduledTimer(withTimeInterval: doubleTapWindow, repeats: false) { [weak self] _ in
                     self?.pendingTapTimer = nil
                     self?.lastTapReleaseTime = nil
-                    NSLog("[KeyMonitor] single tap confirmed")
+                    Log.debug("[KeyMonitor] single tap confirmed")
                     self?.delegate?.keyMonitorDidDetectTap()
                 }
             } else {
-                NSLog("[KeyMonitor] tap (%.0fms) -> immediate", duration * 1000)
+                Log.debug("[KeyMonitor] tap (\(String(format: "%.0f", duration * 1000))ms) -> immediate")
                 delegate?.keyMonitorDidDetectTap()
             }
         }

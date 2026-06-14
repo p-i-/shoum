@@ -38,6 +38,8 @@ class AppStateCoordinator: KeyMonitorDelegate {
     private var escapeMonitor: Any?
 
     private var recordingStartTime: TimeInterval?
+    private var accessibilityPoll: Timer?
+    private var axObserver: NSObjectProtocol?
 
     init() {
         keyMonitor.delegate = self
@@ -48,16 +50,83 @@ class AppStateCoordinator: KeyMonitorDelegate {
 
     func start() {
         serverManager.start()
-        let hotkeyOK = keyMonitor.start()
+        // Only create the event tap when actually authorized. Creating it while
+        // unauthorized yields a DEAD tap that churns (system disables → our
+        // handler re-enables) and spawns repeated Accessibility popups. When
+        // untrusted we create nothing and wait for the grant, then arm.
+        let trusted = AXIsProcessTrusted()
+        let hotkeyOK = trusted && keyMonitor.start()
         setupEscapeKeyMonitor()
         audioRecorder.prepare()
         readiness.run(recorder: audioRecorder, hotkeyOK: hotkeyOK)
+        if !trusted { pollForAccessibilityGrant() }
     }
 
     func stop() {
+        stopAccessibilityWatch()
         keyMonitor.stop()
         removeEscapeKeyMonitor()
         serverManager.stop()
+    }
+
+    /// Watch for the user granting Accessibility and re-arm the tap LIVE.
+    /// Two triggers (a 1.5 s poll and the system's accessibility-changed
+    /// distributed notification) both call `attemptHotkeyRearm`, which logs
+    /// every signal so the next test run resolves what's still uncertain:
+    ///  - does `AXIsProcessTrusted()` update live or cache per-process?
+    ///  - does `tapIsEnabled` distinguish a live tap from the dead launch one?
+    ///  - does the `com.apple.accessibility.api` notification actually fire?
+    /// If the logs show `AXIsProcessTrusted` never flips, we'll switch to an
+    /// auto-relaunch on the notification.
+    private func pollForAccessibilityGrant() {
+        accessibilityPoll?.invalidate()
+        accessibilityPoll = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+            self?.attemptHotkeyRearm(trigger: "poll")
+        }
+        axObserver = DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name("com.apple.accessibility.api"), object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.attemptHotkeyRearm(trigger: "notification")
+        }
+    }
+
+    private func attemptHotkeyRearm(trigger: String) {
+        let trusted = AXIsProcessTrusted()
+        Log.info("[Accessibility] \(trigger): AXIsProcessTrusted=\(trusted) currentTapEnabled=\(keyMonitor.isTapEnabled)")
+        guard trusted else { return }
+        // Trusted now — replace the (possibly dead) launch tap with a fresh one.
+        keyMonitor.stop()
+        let created = keyMonitor.start(quiet: true)
+        Log.info("[Accessibility] re-arm after trust: created=\(created) enabled=\(keyMonitor.isTapEnabled)")
+        if created {
+            stopAccessibilityWatch()
+            readiness.markHotkeyArmed()
+            Log.info("[Accessibility] hotkey armed LIVE — no relaunch")
+        }
+    }
+
+    private func stopAccessibilityWatch() {
+        accessibilityPoll?.invalidate()
+        accessibilityPoll = nil
+        if let o = axObserver {
+            DistributedNotificationCenter.default().removeObserver(o)
+            axObserver = nil
+        }
+    }
+
+    /// Apply a Settings-pane change live. Reloading Config.shared makes every
+    /// in-process consumer (KeyMonitor, AppState, Transcriber) pick up the new
+    /// values immediately; only an engine-affecting change needs the
+    /// whisper-server relaunched.
+    func applySettings(engineChanged: Bool) {
+        Config.reload()
+        if engineChanged { serverManager.restart() }
+    }
+
+    /// Let the Settings window come in front of the floating box while it's
+    /// frontmost; restore floating otherwise.
+    func setOverlayFloating(_ floating: Bool) {
+        overlayWindow.setFloating(floating)
     }
 
     // MARK: - KeyMonitorDelegate
@@ -66,7 +135,7 @@ class AppStateCoordinator: KeyMonitorDelegate {
         switch currentState {
         case .idle:
             guard readiness.isReady else {
-                NSLog("[AppState] double-tap before ready - showing status")
+                Log.info("[AppState] double-tap before ready - showing status")
                 delegate?.appStateNeedsAttention()
                 return
             }
@@ -108,10 +177,10 @@ class AppStateCoordinator: KeyMonitorDelegate {
         do {
             try audioRecorder.startRecording()
             recordingStartTime = ProcessInfo.processInfo.systemUptime
-            NSLog("[AppState] ▶ RECORDING STARTED (%@)", isFirstChunk ? "first chunk" : "additional chunk")
+            Log.info("[AppState] ▶ RECORDING STARTED (\(isFirstChunk ? "first chunk" : "additional chunk"))")
             currentState = .recording
         } catch {
-            NSLog("[AppState] recording FAILED to start: \(error.localizedDescription)")
+            Log.error("[AppState] recording FAILED to start: \(error.localizedDescription)")
             overlayWindow.finish(with: nil)
             showError("Failed to start recording: \(error.localizedDescription)")
             if isFirstChunk {
@@ -124,7 +193,7 @@ class AppStateCoordinator: KeyMonitorDelegate {
     private func stopRecordingAndTranscribe() {
         let duration = recordingStartTime.map { ProcessInfo.processInfo.systemUptime - $0 } ?? 0
         recordingStartTime = nil
-        NSLog("[AppState] ■ RECORDING STOPPED after %.2fs -> transcribing", duration)
+        Log.info("[AppState] ■ RECORDING STOPPED after \(String(format: "%.2f", duration))s -> transcribing")
         let wavURL = audioRecorder.stopRecording()
         playSound(.stop)
         overlayWindow.markProcessing()
@@ -146,7 +215,7 @@ class AppStateCoordinator: KeyMonitorDelegate {
     }
 
     private func handleTranscriptionSuccess(_ text: String) {
-        NSLog("[AppState] transcription OK: %d chars: \"%@\"", text.count, String(text.prefix(80)))
+        Log.info("[AppState] transcription OK: \(text.count) chars: \"\(String(text.prefix(80)))\"")
         playSound(.success)
 
         // Copy to clipboard; the 🧠 marker becomes the transcribed text
@@ -157,7 +226,7 @@ class AppStateCoordinator: KeyMonitorDelegate {
     }
 
     private func handleTranscriptionError(_ error: Error) {
-        NSLog("[AppState] transcription FAILED: \(error.localizedDescription)")
+        Log.error("[AppState] transcription FAILED: \(error.localizedDescription)")
         overlayWindow.finish(with: nil)
         if case Transcriber.TranscriberError.emptyTranscription = error {
             // Empty transcription - the marker just disappears
@@ -180,7 +249,7 @@ class AppStateCoordinator: KeyMonitorDelegate {
         }
 
         if Config.shared.pasteMode == "copy" {
-            NSLog("[AppState] copying %d chars to clipboard (paste_mode: copy)", text.count)
+            Log.info("[AppState] copying \(text.count) chars to clipboard (paste_mode: copy)")
             clipboardManager.copyToClipboard(text)
             overlayWindow.hide()
             clipboardManager.refocusRememberedApp()
@@ -188,7 +257,7 @@ class AppStateCoordinator: KeyMonitorDelegate {
             return
         }
 
-        NSLog("[AppState] pasting %d chars to previous app", text.count)
+        Log.info("[AppState] pasting \(text.count) chars to previous app")
         clipboardManager.pasteToRememberedApp(text)
 
         // Hide overlay after a brief delay to ensure paste completes
@@ -199,7 +268,7 @@ class AppStateCoordinator: KeyMonitorDelegate {
     }
 
     private func dismiss() {
-        NSLog("[AppState] dismissed (escape)")
+        Log.info("[AppState] dismissed (escape)")
         overlayWindow.hide()
         clipboardManager.refocusRememberedApp()
         currentState = .idle
@@ -212,7 +281,7 @@ class AppStateCoordinator: KeyMonitorDelegate {
         recordingStartTime = nil
         let wavURL = audioRecorder.stopRecording()
         try? FileManager.default.removeItem(at: wavURL)
-        NSLog("[AppState] recording cancelled (escape)")
+        Log.info("[AppState] recording cancelled (escape)")
         playSound(.subtle)
         overlayWindow.finish(with: nil) // removes the marker, restores any selection
         currentState = .editing
