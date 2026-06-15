@@ -22,11 +22,22 @@ swiftc \
     -o "$APP/Contents/MacOS/SpeakApp" \
     "$SRC_DIR"/*.swift
 
+# Stamp the build with its git commit (short hash, +"-dirty" if the working tree
+# has uncommitted changes). The app reads this (Info.plist → SpeakGitCommit) for
+# the About pane and the update check; "unknown"/"-dirty" marks a dev build that
+# skips the update check.
+GIT_COMMIT=$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+if [ "$GIT_COMMIT" != "unknown" ] && ! git -C "$SCRIPT_DIR" diff --quiet 2>/dev/null; then
+    GIT_COMMIT="$GIT_COMMIT-dirty"
+fi
+echo "Stamping build: $GIT_COMMIT"
+
 # Info.plist: substitute the variables Xcode used to expand
 sed -e 's/\$(EXECUTABLE_NAME)/SpeakApp/g' \
     -e 's/\$(PRODUCT_NAME)/SpeakApp/g' \
     -e 's/\$(PRODUCT_BUNDLE_IDENTIFIER)/com.local.SpeakApp/g' \
     -e 's/\$(MACOSX_DEPLOYMENT_TARGET)/14.0/g' \
+    -e "s/\$(SPEAK_GIT_COMMIT)/$GIT_COMMIT/g" \
     "$SRC_DIR/Info.plist" > "$APP/Contents/Info.plist"
 plutil -lint -s "$APP/Contents/Info.plist"
 

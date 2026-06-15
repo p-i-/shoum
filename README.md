@@ -39,9 +39,14 @@ server is a child process this app owns and restarts on crash — no opaque daem
 ## Requirements
 
 - Apple Silicon Mac, macOS 14.0+
-- Xcode **Command Line Tools** (`xcode-select --install`) — no Xcode needed
-- `cmake`, `python3` (the latter is used once, at install, for the ANE encoder)
+- Apple developer toolchain — **Xcode Command Line Tools** (`xcode-select --install`)
+  or full Xcode; provides `clang`, `swiftc`, `python3`, `git`
+- `cmake` (`brew install cmake`) — not bundled with the toolchain
 - ~4 GB disk during install; ~2 GB resident model after
+
+`install.sh` checks for all of these up front and tells you exactly what to install
+if anything's missing. (This builds from source — it's the developer/contributor
+path; a prebuilt signed app is the planned end-user distribution.)
 
 ## Install
 
@@ -83,7 +88,7 @@ place), after which dev builds resolve the model from there.
 
 ## Configuration
 
-Edit via the **Settings tab** (menu-bar icon → left-click → Settings) or edit
+Edit via the **Settings tab** (click the menu-bar icon → Settings…) or edit
 `config.yaml` directly — both are equivalent; the Settings pane writes the same
 file with a surgical per-line edit that preserves comments. **Restart to apply.**
 
@@ -106,6 +111,9 @@ back to defaults.
 | `hotkey_keycode` | `56` | 56 = left shift, 60 = right shift |
 | `sounds` | `true` | Tink/Pop/Glass feedback |
 | `paste_mode` | `paste` | `paste` = ⌘V into previous app; `copy` = clipboard only |
+| `keep_recordings` | `true` | retain WAVs in `/tmp/speak/wavs` for 24h (debugging) |
+| `min_speech_dbfs` | `-60` | clips never louder than this are treated as no-speech (skip whisper) |
+| `check_for_updates` | `true` | check GitHub on launch; notify in the menu if a newer build exists |
 
 Vocabulary biasing lives in `prompt.txt` (free prose; whisper takes ~220 tokens
 as its initial prompt). Edit it in the Settings tab or directly (same locations
@@ -129,7 +137,7 @@ only).
 - **server.log** — whisper-server's own output (model load phases, per-request
   errors). Truncated each launch.
 - **`tools/mic-test.sh`** — standalone smoke test of the mic→16kHz→WAV pipeline.
-- **Status tab** (menu-bar icon → left-click) — live ✅/❌ per subsystem, the
+- **Status tab** (click the menu-bar icon → Status…) — live ✅/❌ per subsystem, the
   install paths, and **Open Settings…** deep-links for missing permissions.
 
 ## Known limitations

@@ -235,6 +235,57 @@ time is short.)
 
 ---
 
+## 2b. NEW DIRECTION (decided 2026-06-15) — signed distribution
+
+**Decision:** pursue proper distribution — reactivate an Apple Developer account
+($99/yr), sign with a Developer ID, notarize. Possibly a paid utility. This
+*supersedes* the compile-from-source-as-distribution stance and reframes several
+§2/§4 decisions.
+
+**Why.** Building from source is a *developer* install: it needs Xcode/CLT +
+cmake + python3 + ~4 GB of downloads + a multi-minute compile, and ad-hoc signing
+**churns TCC grants on every (re)install** (new cdhash each build → Accessibility +
+Mic re-prompt). No paying, non-technical user will do that. A Developer-ID-signed,
+notarized `.app` removes ALL of it for end users (download → drag to /Applications
+→ launch) **and** gives a stable signature so permissions persist across updates.
+
+**Two-track model:**
+- *Developer/contributor:* permanent clone → `install.sh` (build from source) →
+  `build.sh`/`run.sh` → `install.sh`. Needs the toolchain. install.sh now
+  preflight-checks all prereqs and advises (done 2026-06-15); README is honest
+  ("CLT or Xcode"). The `curl|bash` bootstrap idea drops to a dev convenience, NOT
+  the consumer path.
+- *End user:* download a notarized `.dmg`, drag to /Applications. Zero toolchain.
+
+**Updates: NOTIFY-ONLY** (no in-app rebuild/auto-update — decided). Implemented
+2026-06-15: build.sh stamps the git commit into Info.plist (`SpeakGitCommit`);
+`UpdateChecker` queries GitHub's latest `main` commit on launch (`check_for_updates`,
+default on — the only network call); the menu shows "Update available → <sha>".
+Dev builds (`-dirty`/`unknown`) skip the check. The item opens the repo for now;
+once signed releases exist it can point at the `.dmg`. Sparkle (true auto-update of
+a signed `.dmg`) is *possible* later but explicitly NOT wanted now.
+
+**Open decisions for the signed arc:**
+- **Notarization pipeline:** Developer ID Application cert, hardened runtime
+  (`codesign --options runtime`), `xcrun notarytool submit`, `stapler staple`,
+  package as `.dmg`. VERIFY entitlements for hardened-runtime + mic +
+  the `CGEventTap` (Accessibility is a runtime TCC grant, likely fine; mic needs
+  `NSMicrophoneUsageDescription`, present).
+- **Model bundling:** fat signed `.app` (~2 GB download, dead simple) vs thin app
+  that downloads the model on first run (smaller download, needs hosting + a signed
+  fetch). The thin-app + shared-store design in §2 was a *consequence* of
+  compile-from-source — reconsider it under prebuilt distribution.
+- **Hosting:** GitHub Releases for the `.dmg`; the update check could then compare
+  release tags instead of raw commit hashes.
+- **Pricing/licensing** — out of scope here, but it's the reason low-friction
+  install matters.
+
+**Supersedes:** §4's "no developer account" rationale (we're getting one); the
+"CLT-only / no Xcode" claim (now "CLT or Xcode", and moot for end users once
+prebuilt). The §2 thin-app/shared-store model is up for reconsideration.
+
+---
+
 ## 3. NEXT ARC — Eager background transcription (latency + >30s correctness)
 
 **Big architectural change; hand to a FRESH agent after v1 (§2) is installed +

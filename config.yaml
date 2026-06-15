@@ -52,3 +52,8 @@ keep_recordings: true
 # silence sits ~-80 dBFS, real speech ~-25. Raise toward 0 to gate more
 # aggressively; lower to let quieter clips through.
 min_speech_dbfs: -60
+
+# Check GitHub on launch and show "Update available" in the menu if a newer build
+# exists. This is the only network call Speak makes (metadata only — one commit
+# hash). Set false to disable it entirely.
+check_for_updates: true

@@ -1,9 +1,11 @@
 import Cocoa
 
-class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private var appStateCoordinator: AppStateCoordinator!
     private var splash: SplashWindow!
+    private let updateChecker = UpdateChecker()
+    private var updateAvailable = false
     /// Did any check ever fail? If the user had to fix something, we keep the
     /// window up on success (don't auto-close, surface the resolved state).
     private var everFailed = false
@@ -39,6 +41,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessD
             self?.appStateCoordinator.setOverlayFloating(!settingsIsKey)
         }
 
+        // Notify-only update check (async; the menu reads `updateAvailable` the
+        // next time it opens).
+        updateChecker.check { [weak self] available in
+            self?.updateAvailable = available
+        }
+
         Log.info("[SpeakApp] Startup checks running")
     }
 
@@ -50,35 +58,74 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessD
 
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "hourglass.circle", accessibilityDescription: "Speak (starting)")
-            button.target = self
-            button.action = #selector(statusItemClicked)
-            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
-        }
-    }
-
-    // Left-click toggles the window; right-click (or control-click) shows a menu.
-    @objc private func statusItemClicked() {
-        let event = NSApp.currentEvent
-        let isRight = event?.type == .rightMouseUp
-            || (event?.modifierFlags.contains(.control) ?? false)
-        if isRight { showMenu() } else { splash.toggle() }
-    }
-
-    private func showMenu() {
+        statusItem.button?.image = NSImage(systemSymbolName: "hourglass.circle",
+                                           accessibilityDescription: "Speak (starting)")
+        // A menu on the status item means every click — left OR right — opens it
+        // (Docker-style). It's rebuilt on each open (menuNeedsUpdate) so the
+        // status line reflects the current state.
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "Show Speak…", action: #selector(showStatus), keyEquivalent: ""))
+        menu.delegate = self
+        statusItem.menu = menu
+    }
+
+    // MARK: - Status-item menu (NSMenuDelegate)
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+
+        let status = NSMenuItem(title: statusLineTitle(), action: nil, keyEquivalent: "")
+        status.isEnabled = false
+        status.image = statusDot()
+        menu.addItem(status)
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Quit Speak", action: #selector(quit), keyEquivalent: "q"))
-        if let button = statusItem.button {
-            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height + 4), in: button)
+
+        menu.addItem(menuItem("Status…", "waveform.circle", #selector(openStatusTab)))
+        menu.addItem(menuItem("Settings…", "gearshape", #selector(openSettingsTab), key: ","))
+        menu.addItem(menuItem("About…", "info.circle", #selector(openAboutTab)))
+
+        if updateAvailable {
+            menu.addItem(.separator())
+            let label = updateChecker.latestRemote.map { "Update available → \($0)" } ?? "Update available"
+            menu.addItem(menuItem(label, "arrow.down.circle", #selector(openUpdate)))
+        }
+
+        menu.addItem(.separator())
+        menu.addItem(menuItem("Quit Speak", "power", #selector(quit), key: "q"))
+    }
+
+    private func menuItem(_ title: String, _ symbol: String, _ action: Selector, key: String = "") -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+        item.target = self
+        item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        return item
+    }
+
+    private func statusLineTitle() -> String {
+        let readiness = appStateCoordinator.readiness
+        if readiness.anyFailed { return "Setup needed — open Status" }
+        if !readiness.isReady { return "Starting…" }
+        switch appStateCoordinator.currentState {
+        case .idle:       return "Ready — double-tap ⇧ to dictate"
+        case .recording:  return "Recording — tap ⇧ to stop"
+        case .processing: return "Transcribing…"
+        case .editing:    return "Editing — tap ⇧ to paste"
         }
     }
 
-    @objc private func showStatus() {
-        splash.show()
+    /// A small colored dot mirroring the tray state (Docker's green-dot idiom).
+    private func statusDot() -> NSImage? {
+        let readiness = appStateCoordinator.readiness
+        let color: NSColor = readiness.anyFailed ? .systemRed
+            : (readiness.isReady ? .systemGreen : .systemYellow)
+        let config = NSImage.SymbolConfiguration(hierarchicalColor: color)
+        return NSImage(systemSymbolName: "circle.fill", accessibilityDescription: nil)?
+            .withSymbolConfiguration(config)
     }
+
+    @objc private func openStatusTab()   { splash.show(tab: "status") }
+    @objc private func openSettingsTab() { splash.show(tab: "settings") }
+    @objc private func openAboutTab()    { splash.show(tab: "about") }
+    @objc private func openUpdate()      { NSWorkspace.shared.open(UpdateChecker.repoURL) }
 
     @objc private func quit() {
         NSApp.terminate(nil)

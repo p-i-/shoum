@@ -17,7 +17,7 @@ class ClipboardManager {
     /// Give keyboard focus back to whatever app was frontmost before the
     /// overlay appeared (used when dismissing without pasting).
     func refocusRememberedApp() {
-        rememberedApp?.activate(options: [.activateIgnoringOtherApps])
+        rememberedApp?.activate(options: [])
     }
 
     func pasteToRememberedApp(_ text: String) {
@@ -29,7 +29,7 @@ class ClipboardManager {
         }
 
         // Activate the remembered app
-        app.activate(options: [.activateIgnoringOtherApps])
+        app.activate(options: [])
 
         // Brief delay to ensure app is active
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {

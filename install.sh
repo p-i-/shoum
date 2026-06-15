@@ -38,7 +38,49 @@ die()  { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 # ---------------------------------------------------------------------------
 say "Preflight"
 # ---------------------------------------------------------------------------
-[ "$(uname -m)" = "arm64" ] || die "Speak requires Apple Silicon (arm64)."
+[ "$(uname -m)" = "arm64" ] || die "Speak requires Apple Silicon (arm64). This Mac reports '$(uname -m)'."
+
+# Toolchain gate. This is a build-FROM-SOURCE install (for developers /
+# contributors / early adopters); end users will get a prebuilt signed app. So
+# collect EVERY missing prerequisite up front, advise how to install each, and
+# quit before any heavy work — rather than die on the first and make the user
+# re-run repeatedly.
+missing=()
+
+# Apple developer toolchain — clang, swiftc, python3, git, otool. Either the
+# Command Line Tools OR full Xcode satisfies it. Verify with `xcrun --find`, NOT
+# `command -v`: the bare /usr/bin/swiftc shim exists even when no real toolchain
+# is installed, so `command -v swiftc` would falsely pass on a clean Mac.
+if ! xcode-select -p >/dev/null 2>&1 \
+   || ! xcrun --find swiftc >/dev/null 2>&1 \
+   || ! xcrun --find clang  >/dev/null 2>&1; then
+    missing+=("Apple developer toolchain (clang, swiftc, python3, git).
+       Install:  xcode-select --install
+       Full Xcode also works — if it's installed but not selected, run:
+       sudo xcode-select -s /Applications/Xcode.app")
+fi
+
+# cmake — NOT bundled with the toolchain or macOS; needs separate install.
+if ! command -v cmake >/dev/null 2>&1; then
+    if command -v brew >/dev/null 2>&1; then
+        missing+=("cmake.  Install:  brew install cmake")
+    else
+        missing+=("cmake.  Install Homebrew (https://brew.sh) then 'brew install cmake',
+       or download it from https://cmake.org/download/")
+    fi
+fi
+
+# python3 — used once for the ANE encoder conversion (ships with the toolchain,
+# but flag it explicitly since it's the step most likely to surprise).
+command -v python3 >/dev/null 2>&1 \
+    || missing+=("python3 (used once for the ANE encoder). Ships with: xcode-select --install")
+
+if [ ${#missing[@]} -gt 0 ]; then
+    printf '\nCannot build — missing prerequisites:\n\n'
+    for m in "${missing[@]}"; do printf '  • %s\n\n' "$m"; done
+    die "Install the above, then re-run ./install.sh"
+fi
+echo "Toolchain OK — $(xcode-select -p); cmake $(cmake --version | head -1 | awk '{print $3}'); $(python3 --version 2>&1)."
 
 if $DEV; then
     # Make a --dev install genuinely fresh:
@@ -62,12 +104,6 @@ if [ -e "$DEST_APP" ]; then
        Re-run with --dev to replace it, or first: rm -rf \"$DEST_APP\""
     fi
 fi
-
-xcode-select -p >/dev/null 2>&1 || die "Xcode Command Line Tools missing — run: xcode-select --install"
-command -v cmake   >/dev/null 2>&1 || die "cmake missing — run: brew install cmake"
-command -v swiftc  >/dev/null 2>&1 || die "swiftc missing (Command Line Tools)."
-command -v python3 >/dev/null 2>&1 || die "python3 missing (needed once for the ANE encoder conversion)."
-echo "arm64, CLT, cmake, swiftc, python3 — all present."
 
 # ---------------------------------------------------------------------------
 say "whisper.cpp source + model"

@@ -11,6 +11,7 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
     static let autoCloseKey = "autoCloseSplash"
 
     private let panel: NSPanel
+    private var tabView: NSTabView!
     private var rowLabels: [CheckItem: NSTextField] = [:]
     /// "Open Settings…" buttons for the two permission rows, shown when failed.
     private var permissionButtons: [CheckItem: NSButton] = [:]
@@ -61,7 +62,7 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
         super.init()
         panel.delegate = self
 
-        let tabView = NSTabView()
+        tabView = NSTabView()
         tabView.translatesAutoresizingMaskIntoConstraints = false
 
         let statusItem = NSTabViewItem(identifier: "status")
@@ -73,6 +74,11 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
         settingsItem.label = "Settings"
         settingsItem.view = buildSettingsTab()
         tabView.addTabViewItem(settingsItem)
+
+        let aboutItem = NSTabViewItem(identifier: "about")
+        aboutItem.label = "About"
+        aboutItem.view = buildAboutTab()
+        tabView.addTabViewItem(aboutItem)
 
         let content = NSView()
         content.addSubview(tabView)
@@ -277,6 +283,51 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
         }
     }
 
+    // MARK: - About tab
+
+    private func buildAboutTab() -> NSView {
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 8
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        let title = NSTextField(labelWithString: "Speak")
+        title.font = .systemFont(ofSize: 22, weight: .bold)
+        stack.addArrangedSubview(title)
+
+        let tagline = NSTextField(labelWithString: "Local, private speech-to-text for macOS.")
+        tagline.font = .systemFont(ofSize: 12)
+        tagline.textColor = .secondaryLabelColor
+        stack.addArrangedSubview(tagline)
+        stack.setCustomSpacing(14, after: tagline)
+
+        let commit = Bundle.main.object(forInfoDictionaryKey: "SpeakGitCommit") as? String ?? "unknown"
+        let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+        let version = NSTextField(labelWithString: "Version \(short)   build \(commit)")
+        version.font = .monospacedSystemFont(ofSize: 11.5, weight: .regular)
+        version.textColor = .secondaryLabelColor
+        stack.addArrangedSubview(version)
+        stack.setCustomSpacing(16, after: version)
+
+        let credits = NSTextField(wrappingLabelWithString:
+            "Built on whisper.cpp (MIT) and OpenAI's Whisper models, with the encoder "
+            + "running on the Apple Neural Engine. Viridis colormap from matplotlib (CC0).")
+        credits.font = .systemFont(ofSize: 11.5)
+        credits.textColor = .secondaryLabelColor
+        stack.addArrangedSubview(credits)
+        stack.setCustomSpacing(16, after: credits)
+
+        let github = NSButton(title: "View on GitHub", target: self, action: #selector(openRepo))
+        stack.addArrangedSubview(github)
+
+        return wrapInTab(stack, bottom: NSView())
+    }
+
+    @objc private func openRepo() {
+        NSWorkspace.shared.open(UpdateChecker.repoURL)
+    }
+
     // MARK: - Layout helpers
 
     private func formRow(_ labelText: String, _ control: NSView) -> NSView {
@@ -327,6 +378,12 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
 
     func toggle() {
         if panel.isVisible { panel.orderOut(nil) } else { show() }
+    }
+
+    /// Open the window with a specific tab selected (menu deep-links).
+    func show(tab: String) {
+        tabView.selectTabViewItem(withIdentifier: tab)
+        show()
     }
 
     // MARK: - NSWindowDelegate (drive the box's z-order)

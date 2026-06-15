@@ -20,8 +20,9 @@ Adding a source file means dropping it in that directory — nothing to register
 ```
 SpeakApp (Swift, menu bar, LSUIElement)
 ├── main.swift          NSApplication bootstrap
-├── AppDelegate         status item (left-click → window, right-click → menu),
-│                       tray icon state + colour, permission prompt
+├── AppDelegate         status item (any click → menu: status line, Status/
+│                       Settings/About, Update, Quit), tray icon state + colour
+├── UpdateChecker       notify-only: GitHub latest-commit vs stamped SpeakGitCommit
 ├── Config              config.yaml loader + path resolution + surgical writer
 ├── Log                 leveled logger → app log file + stderr
 ├── KeyMonitor          CGEventTap on flagsChanged+keyDown; double-tap state
