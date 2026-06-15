@@ -40,6 +40,15 @@ say "Preflight"
 # ---------------------------------------------------------------------------
 [ "$(uname -m)" = "arm64" ] || die "Speak requires Apple Silicon (arm64). This Mac reports '$(uname -m)'."
 
+# A running instance (dev or installed) fights this build over the left-shift
+# event tap and the whisper-server port, and can't be cleanly replaced while in
+# use. Detect it FIRST — before any build work — and bail clearly.
+if pgrep -x "$APP_NAME" >/dev/null 2>&1; then
+    printf '\n⚠️  %s is already running.\n' "$APP_NAME"
+    printf '   Quit it first (menu-bar icon → Quit Speak, or  pkill -x %s), then re-run.\n\n' "$APP_NAME"
+    exit 1
+fi
+
 # Toolchain gate. This is a build-FROM-SOURCE install (for developers /
 # contributors / early adopters); end users will get a prebuilt signed app. So
 # collect EVERY missing prerequisite up front, advise how to install each, and
@@ -90,8 +99,9 @@ if $DEV; then
     #  • UserDefaults persist in ~/Library/Preferences keyed by bundle id,
     #    independent of the .app, so old prefs (e.g. autoCloseSplash) survive a
     #    reinstall — clear them too.
-    echo "Dev mode: resetting Accessibility grant + preferences for $BUNDLE_ID (clean test)…"
+    echo "Dev mode: resetting Accessibility + Microphone grants + preferences for $BUNDLE_ID (clean test)…"
     tccutil reset Accessibility "$BUNDLE_ID" || true
+    tccutil reset Microphone   "$BUNDLE_ID" || true
     defaults delete "$BUNDLE_ID" 2>/dev/null || true
 fi
 
@@ -221,16 +231,10 @@ echo "Installed: $DEST_APP ($APP_SIZE)"
 # ---------------------------------------------------------------------------
 say "Launch"
 # ---------------------------------------------------------------------------
-# Launching kicks off the first-run Microphone + Accessibility prompts and the
-# startup checklist. Skip auto-launch if a SpeakApp is already running (e.g. a
-# dev run.sh) — both would fight over whisper-server's port.
-if pgrep -f "$APP_NAME/Contents/MacOS/$APP_NAME" >/dev/null 2>&1 || pgrep -x "$APP_NAME" >/dev/null 2>&1; then
-    echo "A SpeakApp is already running — NOT auto-launching (they'd share the server port)."
-    echo "Quit it, then: open \"$DEST_APP\""
-else
-    open "$DEST_APP"
-    echo "Launched. Grant Microphone + Accessibility when prompted; the startup window walks you through it."
-fi
+# Nothing else is running (preflight bails otherwise), so just launch — this
+# kicks off the first-run Microphone + Accessibility prompts and the checklist.
+open "$DEST_APP"
+echo "Launched. Grant Microphone + Accessibility when prompted; the startup window walks you through it."
 
 # ---------------------------------------------------------------------------
 say "Done"

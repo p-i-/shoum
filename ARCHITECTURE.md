@@ -21,7 +21,8 @@ Adding a source file means dropping it in that directory — nothing to register
 SpeakApp (Swift, menu bar, LSUIElement)
 ├── main.swift          NSApplication bootstrap
 ├── AppDelegate         status item (any click → menu: status line, Status/
-│                       Settings/About, Update, Quit), tray icon state + colour
+│                       Settings/About, Update, Quit), tray icon state + colour,
+│                       first-run permission onboarding (sequenced dialogs)
 ├── UpdateChecker       notify-only: GitHub latest-commit vs stamped SpeakGitCommit
 ├── Config              config.yaml loader + path resolution + surgical writer
 ├── Log                 leveled logger → app log file + stderr
@@ -113,3 +114,14 @@ Installed-mode user files are seeded once from bundled `config.default.yaml` /
    button's actual state was dumped (a controlled `tint=nil` vs `tint=green`
    comparison). Compiling ≠ working. When something is hard to see, add the
    observation first; don't guess-and-rebuild.
+10. **Sequence permission dialogs; never fire the Accessibility prompt at
+    launch.** Auto-prompting it at startup (the pre-v1.0 bug) stacks it with the
+    mic dialog as an unanchored popup before any window exists. Fire it only
+    AFTER the mic dialog resolves and the window is foregrounded
+    (`AppDelegate.autoPromptAccessibilityIfNeeded`). `AXIsProcessTrustedWithOptions`
+    is one-shot — it registers the app and shows the dialog only until then — so
+    the Status window's "Open Settings…" button must NAVIGATE to the pane (URL),
+    not re-call the prompt. As an `LSUIElement` app we can't reliably hold
+    activation through the System-Settings round-trip: `orderFrontRegardless`
+    plus a one-shot post-onboarding re-foreground bring our window back (Stage
+    Manager can still override — accept it; the green tray is the done-signal).

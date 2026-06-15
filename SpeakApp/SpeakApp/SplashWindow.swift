@@ -370,6 +370,11 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
         panel.center()
         if activate {
             panel.makeKeyAndOrderFront(nil)
+            // orderFrontRegardless brings the window above OTHER apps' windows
+            // even when we're a background accessory app (LSUIElement) that
+            // can't reliably steal activation — e.g. right after a system
+            // permission dialog hands focus back to the launching Terminal.
+            panel.orderFrontRegardless()
             NSApp.activate(ignoringOtherApps: true)
         } else {
             panel.orderFront(nil)
@@ -425,11 +430,11 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
     }
 
     @objc private func openAccessibility() {
-        // Trigger the system Accessibility prompt: it registers SpeakApp in the
-        // list AND its "Open System Settings" button navigates there. Doing this
-        // on the user's click (not at launch) keeps it from being a surprise.
-        let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
-        _ = AXIsProcessTrustedWithOptions(opts as CFDictionary)
+        // The first-launch auto-prompt (AppDelegate.autoPromptAccessibilityIfNeeded)
+        // already registered the app and consumed the one-shot
+        // AXIsProcessTrustedWithOptions dialog, so this fallback just navigates
+        // straight to the Accessibility pane (where the app is now listed).
+        openPrivacy("Privacy_Accessibility")
     }
 
     @objc private func openMicrophone() {

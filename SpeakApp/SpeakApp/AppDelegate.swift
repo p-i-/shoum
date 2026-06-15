@@ -6,6 +6,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessD
     private var splash: SplashWindow!
     private let updateChecker = UpdateChecker()
     private var updateAvailable = false
+    /// Fire the one-shot Accessibility prompt at most once per launch.
+    private var didAutoPromptAccessibility = false
+    /// One-shot observer that re-foregrounds our window once the user returns
+    /// from System Settings after granting a permission during onboarding.
+    private var postOnboardingObserver: NSObjectProtocol?
     /// Did any check ever fail? If the user had to fix something, we keep the
     /// window up on success (don't auto-close, surface the resolved state).
     private var everFailed = false
@@ -51,6 +56,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessD
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        disarmPostOnboardingForeground()
         appStateCoordinator?.stop()
     }
 
@@ -177,6 +183,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessD
         let readiness = appStateCoordinator.readiness
         splash.update(item, state: state)
         splash.setControlsVisible(readiness.allResolved)
+
+        // First launch: the system shows the Microphone dialog automatically;
+        // dismissing it hands focus back to whoever launched us (the Terminal),
+        // burying our window. Once that resolves, re-assert our window — and
+        // then, with it in front, auto-trigger the Accessibility prompt too.
+        // Sequencing it AFTER mic (not at launch) keeps the two system dialogs
+        // from stacking and anchors this one to our visible window — which is
+        // exactly the "unanchored popup" problem that made us defer it before.
+        // The small delay lets the mic dialog's focus-return settle first.
+        if item == .micPermission, state.isOK || state.isFailed {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                guard let self = self else { return }
+                self.splash.show()
+                self.autoPromptAccessibilityIfNeeded()
+            }
+        }
         if readiness.anyFailed {
             everFailed = true
             splash.markFailed()
@@ -195,7 +217,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessD
         // granted Accessibility), keep the window and bring it back to front so
         // they land on the now-passing checklist instead of it vanishing.
         splash.markReady(autoCloseAllowed: !everFailed)
-        if everFailed { splash.show() }
+        if everFailed {
+            splash.show()
+            armPostOnboardingForeground()
+        }
         stopPulse()
         setIcon("waveform.circle", color: .systemGreen)
     }
@@ -228,11 +253,52 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessD
     // MARK: - Permissions
 
     private func checkAccessibilityPermissions() {
-        // Silent check only — no launch popup. The modal is triggered on demand
-        // when the user clicks the Status window's "Open Settings…" button
-        // (SplashWindow.openAccessibility), which both registers the app and
-        // navigates. User-initiated, no surprise unanchored popup at launch.
+        // Silent check at launch — the prompt is NOT fired here (that was the old
+        // "unanchored popup at startup" bug). It's auto-triggered later, after the
+        // mic dialog resolves and our window is foregrounded (see
+        // readinessDidUpdate → autoPromptAccessibilityIfNeeded), so the two system
+        // dialogs sequence cleanly.
         let trusted = AXIsProcessTrusted()
         Log.info("[SpeakApp] Accessibility: \(trusted ? "GRANTED" : "NOT GRANTED")")
+    }
+
+    /// After the mic dialog has resolved and our window is in front, fire the
+    /// system Accessibility prompt once (if still untrusted). One-shot: it
+    /// registers the app in the Accessibility list and shows the dialog only
+    /// until then — re-launches won't re-pester, and the Status window's button
+    /// navigates straight to the pane afterward.
+    private func autoPromptAccessibilityIfNeeded() {
+        guard !didAutoPromptAccessibility, !AXIsProcessTrusted() else { return }
+        didAutoPromptAccessibility = true
+        let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
+        _ = AXIsProcessTrustedWithOptions(opts as CFDictionary)
+        Log.info("[SpeakApp] auto-prompted Accessibility (post-mic)")
+    }
+
+    /// Onboarding required a grant, so the user was bounced through System
+    /// Settings — and on a Stage Manager / Terminal-launched setup, closing it
+    /// hands focus back to that app, burying our window. There's no "Settings
+    /// closed" event, so we watch for the next activation of an app that's
+    /// neither us nor System Settings (the practical "they're back in their own
+    /// app" signal) and re-assert our window once, then stop fighting for focus.
+    private func armPostOnboardingForeground() {
+        guard postOnboardingObserver == nil else { return }
+        postOnboardingObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let self = self else { return }
+            let bid = (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier
+            if bid == Bundle.main.bundleIdentifier || bid == "com.apple.systempreferences" { return }
+            self.disarmPostOnboardingForeground()
+            self.splash.show()
+            Log.info("[SpeakApp] post-onboarding: re-foregrounded over \(bid ?? "?")")
+        }
+    }
+
+    private func disarmPostOnboardingForeground() {
+        if let observer = postOnboardingObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+            postOnboardingObserver = nil
+        }
     }
 }
