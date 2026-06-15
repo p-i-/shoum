@@ -166,6 +166,16 @@ class AppStateCoordinator: KeyMonitorDelegate {
 
     // MARK: - Private Methods
 
+    /// Seconds to zero at the head of each recording so the start cue (Tink) —
+    /// still ringing through the speakers when the mic arms, with no echo
+    /// cancellation on the raw input — never reaches the file or the
+    /// spectrogram. 100ms "clear the air" always, plus the cue's own length
+    /// when sounds are enabled.
+    private func startCueMuteSeconds() -> TimeInterval {
+        let cue = Config.shared.sounds ? (NSSound(named: "Tink")?.duration ?? 0.3) : 0
+        return 0.1 + cue
+    }
+
     private func startRecording(isFirstChunk: Bool) {
         if isFirstChunk {
             clipboardManager.rememberFrontmostApp()
@@ -175,7 +185,7 @@ class AppStateCoordinator: KeyMonitorDelegate {
         overlayWindow.showRecording()
 
         do {
-            try audioRecorder.startRecording()
+            try audioRecorder.startRecording(muteSeconds: startCueMuteSeconds())
             recordingStartTime = ProcessInfo.processInfo.systemUptime
             Log.info("[AppState] ▶ RECORDING STARTED (\(isFirstChunk ? "first chunk" : "additional chunk"))")
             currentState = .recording
@@ -193,8 +203,23 @@ class AppStateCoordinator: KeyMonitorDelegate {
     private func stopRecordingAndTranscribe() {
         let duration = recordingStartTime.map { ProcessInfo.processInfo.systemUptime - $0 } ?? 0
         recordingStartTime = nil
-        Log.info("[AppState] ■ RECORDING STOPPED after \(String(format: "%.2f", duration))s -> transcribing")
         let wavURL = audioRecorder.stopRecording()
+        Log.info("[AppState] ■ RECORDING STOPPED after \(String(format: "%.2f", duration))s (RMS \(String(format: "%.1f", audioRecorder.lastRMSdBFS)) dBFS) -> \(wavURL.lastPathComponent)")
+
+        // Whisper hallucinates "Thank you" / "Thanks for watching" on
+        // near-silence (no_speech_prob is unreliable — see tools/whisper_probe.py).
+        // If the clip never rose above the speech floor, skip the round-trip and
+        // treat it as empty (also saves the dead time).
+        guard audioRecorder.lastRMSdBFS >= Config.shared.minSpeechDBFS else {
+            Log.info("[AppState] no speech (RMS \(String(format: "%.1f", audioRecorder.lastRMSdBFS)) < \(Config.shared.minSpeechDBFS) dBFS) — skipping whisper")
+            cleanupRecording(wavURL)
+            playSound(.subtle)
+            overlayWindow.finish(with: nil)
+            overlayWindow.show()
+            currentState = .editing
+            return
+        }
+
         playSound(.stop)
         overlayWindow.markProcessing()
         currentState = .processing
@@ -202,8 +227,7 @@ class AppStateCoordinator: KeyMonitorDelegate {
         transcriber.transcribe(wavFile: wavURL) { [weak self] result in
             guard let self = self else { return }
 
-            // Clean up temp file
-            try? FileManager.default.removeItem(at: wavURL)
+            self.cleanupRecording(wavURL)
 
             switch result {
             case .success(let text):
@@ -280,11 +304,32 @@ class AppStateCoordinator: KeyMonitorDelegate {
     private func cancelRecording() {
         recordingStartTime = nil
         let wavURL = audioRecorder.stopRecording()
-        try? FileManager.default.removeItem(at: wavURL)
+        cleanupRecording(wavURL)
         Log.info("[AppState] recording cancelled (escape)")
         playSound(.subtle)
         overlayWindow.finish(with: nil) // removes the marker, restores any selection
         currentState = .editing
+    }
+
+    /// ESC while recording into an EMPTY box: the user reneged on invoking the
+    /// tool — stop the mic, discard the audio, and close the box outright
+    /// (straight to idle) instead of landing in an empty editor.
+    private func cancelRecordingAndClose() {
+        recordingStartTime = nil
+        let wavURL = audioRecorder.stopRecording()
+        cleanupRecording(wavURL)
+        Log.info("[AppState] recording cancelled + box closed (escape on empty box)")
+        playSound(.subtle)
+        overlayWindow.hide()
+        clipboardManager.refocusRememberedApp()
+        currentState = .idle
+    }
+
+    /// Recordings are retained (for post-hoc debugging of misfires) unless
+    /// keep_recordings is off; AudioRecorder prunes the 24h-old ones at launch.
+    private func cleanupRecording(_ url: URL) {
+        guard !Config.shared.keepRecordings else { return }
+        try? FileManager.default.removeItem(at: url)
     }
 
     private func setupEscapeKeyMonitor() {
@@ -293,7 +338,14 @@ class AppStateCoordinator: KeyMonitorDelegate {
 
             if event.keyCode == 53 { // 53 = Escape
                 if self.currentState == .recording {
-                    self.cancelRecording() // first ESC: abort the in-progress recording
+                    // Empty box → the user reneged: stop the mic and close the
+                    // box outright. With text already present, keep it and just
+                    // abort this chunk (land in editing).
+                    if self.overlayWindow.getText().trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        self.cancelRecordingAndClose()
+                    } else {
+                        self.cancelRecording() // first ESC: abort this chunk, keep text
+                    }
                     return nil
                 }
                 if self.currentState == .editing {

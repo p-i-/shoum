@@ -35,8 +35,21 @@ Shipped and confirmed in daily use. Baseline the v1.0 work builds on:
   `visualEffectView.alphaValue = 0.8` (view-level, not window-level — window
   `alphaValue` flattens the vibrancy and kills the blur); persistent scrollbar
   on overflow; `scrollRangeToVisible` so long inserts follow the cursor.
-- **ESC while recording** now aborts the recording (discards audio, keeps box
-  text); a second ESC closes the box.
+- **ESC while recording** aborts the recording (discards audio); on an empty
+  box it closes outright (the user reneged), otherwise it keeps the box text and
+  a second ESC closes the box.
+- **No-speech gate + start-cue mute** (the "Thank you." fix). Whisper
+  hallucinates "Thank you"/"Thanks for watching" on near-silence. Two parts: the
+  recording's first `0.1s + start-cue duration` is zeroed in the audio tap (the
+  Tink bleeds into the mic — no echo cancellation — and seeded the
+  hallucination), and a client-side RMS energy gate (`min_speech_dbfs`, -60)
+  skips whisper entirely when a clip never rises above the speech floor.
+  `no_speech_prob` was measured useless (real speech 0.93 == silence 0.93);
+  energy separates by ~50 dB. Recordings now persist in `/tmp/speak/wavs` (24h,
+  pruned at launch + each stop) with `tools/whisper_probe.py` to inspect
+  whisper's verbose_json.
+- **Trailing ellipsis strip.** Whisper's "..." on utterances it thinks trail off
+  is removed (runs of 2+ dots; a real sentence-ending "." survives).
 
 ---
 
@@ -288,12 +301,37 @@ already transcribed, and highlight the chunk currently in flight — honest,
 pretty feedback that pairs naturally with the pipeline.
 
 ### Cheaper alternative to try FIRST (cheap experiment, ~0 code)
-Before the full rewrite, test whisper.cpp server flags via `server_args` that
-reduce the >30 s repetition/hallucination — notably NOT conditioning on previous
-text across segments, and entropy/temperature fallback thresholds. VERIFY the
-exact flag names against this whisper.cpp build (don't assume). This won't help
-latency, but if it kills the boundary artifact it lowers the urgency of the
-rewrite to "latency only."
+Before the full rewrite, try whisper.cpp server flags that reduce the >30 s
+repetition/hallucination. VERIFIED on this 1.8.3 build: `no_context` is already
+hard-true server-side (each `/inference` clears prior context), but within a
+single >30 s call the decoded text still rolls forward across the internal 30 s
+windows, and there's no request flag to disable that. Entropy/temperature
+fallback thresholds ARE request-settable. This won't help latency, but if it
+kills the boundary artifact it lowers the rewrite to "latency only."
+
+### Silero VAD + granular JSON (earmarked 2026-06-15)
+The no-speech misfire is already handled by a client-side RMS gate (§1). When we
+do this arc, consider getting more out of whisper:
+- **Silero VAD** (`-vm <ggml>`, fetched by `whisper.cpp/models/download-vad-model.sh`;
+  a SEPARATE ~1-2 MB neural net — NOT whisper — emitting per-frame speech probs,
+  `whisper_vad_*` in `whisper.h`). Server-side pre-filter: non-speech windows
+  yield empty output (~1-2 ms cost; small enough to bundle in the `.app`). This is
+  the natural FIRST experiment for the >30 s artifact (whisper segments on speech,
+  never cutting mid-word at 30 s) AND a noise-robust no-speech filter. Caveat: it
+  runs at TRANSCRIPTION time, so it does NOT serve live cutting (that needs a
+  CLIENT-side VAD) — and watch the 1.8.x quirk where no-voice returned the prior
+  transcription (GH #3250), another reason to keep a client-side gate.
+- **verbose_json signals** (measured — don't re-derive): `no_speech_prob` is
+  UNRELIABLE (real speech 0.93 == silent hallucination 0.93). `avg_logprob` looks
+  promising but our hallucinations sit at ~-0.5, so community -0.8/-1.0 thresholds
+  don't transfer to medium.en+ANE. `compression_ratio` is commented out in this
+  server build (would need a patch).
+- **The silence/VAD result we'd want is NOT exposed over HTTP:** whisper.cpp
+  computes per-frame VAD probs + speech-segment t0/t1 internally
+  (`whisper_vad_probs`, `whisper_vad_segments_*`), but the server only returns
+  transcription segments. Surfacing speech/silence boundaries would need a server
+  patch or a client-side VAD. `tools/whisper_probe.py` dumps what verbose_json
+  DOES expose today.
 
 ### Risks / open questions
 - **Context loss:** decoding an early chunk without later context. Small for

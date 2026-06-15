@@ -128,11 +128,18 @@ class Transcriber {
         // Join whisper's segments with a SPACE, not a newline: for continuous
         // dictation its segment breaks (at pauses / the 30s window boundary) are
         // artifacts, not intended paragraphs. Real breaks = separate chunks.
-        let joined = lines.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
-        // Whisper sometimes emits a spurious leading "." (or "...") when an
-        // utterance opens with a brief silence — strip leading dots/whitespace so
-        // chunks don't start with a stray full stop (see log.txt: ". I think…").
-        return String(joined.drop(while: { $0 == "." || $0 == "…" || $0.isWhitespace }))
+        var joined = lines.joined(separator: " ")
+        // Whisper marks utterances it thinks trail off with an ellipsis ("...");
+        // the user rarely does so deliberately. Strip runs of 2+ dots anywhere
+        // (a real sentence-ending single "." survives), then collapse the double
+        // space an interior strip can leave behind.
+        joined = joined.replacingOccurrences(of: "\\.{2,}", with: "", options: .regularExpression)
+        joined = joined.replacingOccurrences(of: " {2,}", with: " ", options: .regularExpression)
+        joined = joined.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A spurious LEADING single "." (or whitespace) still slips through when
+        // an utterance opens on a brief silence (see log.txt: ". I think...") —
+        // the 2+-dot rule won't catch a lone dot, so strip leading dots here.
+        return String(joined.drop(while: { $0 == "." || $0.isWhitespace }))
     }
 
     enum TranscriberError: LocalizedError {

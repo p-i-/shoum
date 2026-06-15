@@ -42,3 +42,13 @@ sounds: true
 
 # paste = switch to previous app and Cmd+V; copy = clipboard only.
 paste_mode: paste
+
+# Keep recorded WAVs in /tmp/speak/wavs for 24h so misfires can be inspected,
+# then auto-pruned. Set false to delete each clip right after transcription.
+keep_recordings: true
+
+# Recordings whose loudness never rises above this (dBFS) are treated as
+# no-speech and skipped — whisper hallucinates "Thank you" on silence. Measured
+# silence sits ~-80 dBFS, real speech ~-25. Raise toward 0 to gate more
+# aggressively; lower to let quieter clips through.
+min_speech_dbfs: -60

@@ -69,10 +69,13 @@ upgrade in v1** — to reinstall, delete `/Applications/SpeakApp.app` first.
 Skip the installer and iterate from the clone:
 
 ```bash
-./build.sh             # compile SpeakApp.app into ./build
-./run.sh               # foreground, logs stream to terminal + log.txt
-./run.sh --detached    # background; logs still go to log.txt
+./build.sh   # compile SpeakApp.app into ./build
+./run.sh     # foreground, logs stream to terminal + log.txt; Ctrl+C to quit
 ```
+
+`run.sh` enforces one instance at a time: it refuses to start if a dev build is
+already running, and temporarily stops the installed app (relaunching it when
+you quit) so the two never fight over the hotkey and the whisper-server.
 
 The first run from a fresh clone also needs whisper.cpp built + the model; the
 easiest path is to run `install.sh` once (it leaves the shared model store in

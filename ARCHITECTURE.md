@@ -12,7 +12,7 @@ Gatekeeper is satisfied and ad-hoc signing is enough for TCC (mic/accessibility)
 Adding a source file means dropping it in that directory — nothing to register.
 
 - `build.sh` — compile the app (dev).
-- `run.sh` — run from the clone, foreground logs; `run.sh --detached` backgrounds it.
+- `run.sh` — run from the clone, foreground logs; one instance at a time (stops/relaunches the installed app so they don't fight).
 - `install.sh` — the user-facing installer (see "Install layout" below).
 
 ## Components
