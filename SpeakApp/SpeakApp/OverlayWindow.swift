@@ -137,10 +137,36 @@ class OverlayWindow {
     // MARK: - Visibility
 
     func show() {
+        snapHeightToLineGrid()
         if !panel.isVisible { centerOnScreen() }
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(textView)
+    }
+
+    /// Trim the panel so the text scroll view's visible height is an exact whole
+    /// number of text lines (plus the top/bottom inset). Left unsnapped, the clip
+    /// view is a hair taller than a line multiple, so a scrolled box shows the
+    /// bottom sliver of the line above — a row of stray pixels at the top edge.
+    /// Runs once (the panel is fixed-size); shrinks from the bottom so the top
+    /// edge stays put.
+    private var didSnapHeight = false
+    private func snapHeightToLineGrid() {
+        guard !didSnapHeight else { return }
+        panel.contentView?.layoutSubtreeIfNeeded()
+        guard let lm = textView.layoutManager, let font = textView.font else { return }
+        let lineHeight = lm.defaultLineHeight(for: font)
+        let inset = textView.textContainerInset.height
+        let clipHeight = scrollView.contentView.bounds.height
+        let lines = floor((clipHeight - inset) / lineHeight)
+        guard lines >= 1 else { return } // not laid out yet — retry on next show
+        didSnapHeight = true
+        let residual = clipHeight - (inset + lines * lineHeight)
+        guard residual > 0.5 else { return }
+        var frame = panel.frame
+        frame.origin.y += residual      // keep the top edge fixed while shrinking
+        frame.size.height -= residual
+        panel.setFrame(frame, display: true)
     }
 
     func hide() {

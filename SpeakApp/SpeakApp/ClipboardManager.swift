@@ -3,6 +3,8 @@ import Carbon.HIToolbox
 
 class ClipboardManager {
     private var rememberedApp: NSRunningApplication?
+    private var savedItems: [NSPasteboardItem]?
+    private var didSave = false
 
     func rememberFrontmostApp() {
         rememberedApp = NSWorkspace.shared.frontmostApplication
@@ -14,13 +16,42 @@ class ClipboardManager {
         pasteboard.setString(text, forType: .string)
     }
 
+    /// Snapshot the user's current clipboard (every item and type, best-effort)
+    /// so it can be handed back after we borrow the pasteboard to deliver a paste.
+    func saveClipboard() {
+        let pb = NSPasteboard.general
+        savedItems = pb.pasteboardItems?.compactMap { item in
+            let copy = NSPasteboardItem()
+            for type in item.types {
+                if let data = item.data(forType: type) { copy.setData(data, forType: type) }
+            }
+            return copy.types.isEmpty ? nil : copy
+        }
+        didSave = true
+    }
+
+    /// Restore the snapshotted clipboard (no-op if nothing was saved). An empty
+    /// snapshot restores to empty — matching what the user actually had.
+    func restoreClipboard() {
+        guard didSave else { return }
+        didSave = false
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        if let items = savedItems, !items.isEmpty { pb.writeObjects(items) }
+        savedItems = nil
+    }
+
     /// Give keyboard focus back to whatever app was frontmost before the
     /// overlay appeared (used when dismissing without pasting).
     func refocusRememberedApp() {
         rememberedApp?.activate(options: [])
     }
 
-    func pasteToRememberedApp(_ text: String) {
+    func pasteToRememberedApp(_ text: String, restoreClipboardAfter: Bool = false) {
+        // The clipboard still holds the user's own content at this point; snapshot
+        // it before we overwrite it with our payload so we can hand it back once
+        // the paste has landed.
+        if restoreClipboardAfter { saveClipboard() }
         copyToClipboard(text)
 
         guard let app = rememberedApp else {
@@ -32,8 +63,13 @@ class ClipboardManager {
         app.activate(options: [])
 
         // Brief delay to ensure app is active
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            self.simulatePaste()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.simulatePaste()
+            if restoreClipboardAfter {
+                // Give the target app a moment to consume the synthetic ⌘V before
+                // we put the user's clipboard back.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self?.restoreClipboard() }
+            }
         }
     }
 

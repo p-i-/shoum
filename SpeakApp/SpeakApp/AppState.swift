@@ -276,8 +276,9 @@ class AppStateCoordinator: KeyMonitorDelegate {
         Log.info("[AppState] transcription OK: \(text.count) chars: \"\(String(text.prefix(80)))\"")
         playSound(.success)
 
-        // Copy to clipboard; the 🧠 marker becomes the transcribed text
-        clipboardManager.copyToClipboard(text)
+        // The 🧠 marker becomes the transcribed text. The clipboard is left
+        // untouched until the user confirms (single-tap) so dictating never
+        // clobbers what they had copied; confirmAndPaste borrows it then restores.
         overlayWindow.finish(with: text)
 
         currentState = .editing
@@ -318,7 +319,7 @@ class AppStateCoordinator: KeyMonitorDelegate {
         }
 
         Log.info("[AppState] pasting \(text.count) chars to previous app")
-        clipboardManager.pasteToRememberedApp(text)
+        clipboardManager.pasteToRememberedApp(text, restoreClipboardAfter: true)
 
         // Hide overlay after a brief delay to ensure paste completes
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
