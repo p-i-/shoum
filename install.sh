@@ -177,8 +177,19 @@ fi
 say "Build SpeakApp"
 # ---------------------------------------------------------------------------
 cd "$SCRIPT_DIR"
-./build.sh
+# --static: link the VAD against the static archives built above, so the app
+# binary is self-contained (no dylib rpaths into this clone).
+./build.sh --static
 [ -d "$BUILD_APP" ] || die "SpeakApp build did not produce $BUILD_APP"
+
+# The app statically links whisper for VAD → its binary must be self-contained
+# too (only system frameworks). Guard like we do for whisper-server.
+APP_BIN="$BUILD_APP/Contents/MacOS/$APP_NAME"
+if otool -L "$APP_BIN" | tail -n +2 | grep -qE '@rpath|@loader_path|'"$SCRIPT_DIR"; then
+    otool -L "$APP_BIN"
+    die "SpeakApp binary has non-system dynamic deps — would break once the clone is removed."
+fi
+echo "SpeakApp binary is self-contained (system frameworks only)."
 
 # ---------------------------------------------------------------------------
 say "Stage self-contained app into /Applications"
@@ -210,6 +221,20 @@ if [ -d "$STORE/ggml-$MODEL-encoder.mlmodelc" ]; then
     echo "encoder already in shared store — leaving the clone copy for you to remove."
 else
     mv "$ENCODER" "$STORE/"
+fi
+
+# Silero VAD model for the live speech detector (the small ~1 MB net, NOT
+# whisper). Ship the fixture committed in the whisper.cpp clone under the
+# canonical name Config.vadModelPath resolves. (download-vad-model.sh silero-v6.2.0
+# would fetch the same model from HF if you ever need a fresh copy.)
+VAD_SRC="$WHISPER_DIR/models/for-tests-silero-v6.2.0-ggml.bin"
+if [ -f "$STORE/ggml-silero-v6.2.0.bin" ]; then
+    echo "Silero VAD model already in shared store."
+elif [ -f "$VAD_SRC" ]; then
+    cp "$VAD_SRC" "$STORE/ggml-silero-v6.2.0.bin"
+    echo "Staged Silero VAD model into the shared store."
+else
+    echo "⚠️  Silero VAD model not found at $VAD_SRC — the app will fall back to the energy gate."
 fi
 echo "Model assets in shared store: $STORE"
 

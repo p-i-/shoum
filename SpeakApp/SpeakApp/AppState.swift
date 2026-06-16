@@ -43,8 +43,8 @@ class AppStateCoordinator: KeyMonitorDelegate {
 
     init() {
         keyMonitor.delegate = self
-        audioRecorder.onBuffer = { [weak self] samples, sampleRate in
-            self?.overlayWindow.spectrogram.push(samples, sampleRate: sampleRate)
+        audioRecorder.onSamples16k = { [weak self] samples in
+            self?.overlayWindow.spectrogram.push16k(samples)
         }
     }
 

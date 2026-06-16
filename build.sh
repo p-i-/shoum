@@ -8,19 +8,52 @@ SRC_DIR="$SCRIPT_DIR/SpeakApp/SpeakApp"
 BUILD_DIR="$SCRIPT_DIR/build"
 APP="$BUILD_DIR/SpeakApp.app"
 
-if [ "$1" = "--clean" ]; then
-    echo "Cleaning build directory..."
-    rm -rf "$BUILD_DIR"
-fi
+# --static links the VAD against whisper.cpp's STATIC archives (build-install) so
+# the app binary is self-contained — used by install.sh. Default (dev) links the
+# clone's dylibs by rpath (fast iteration, but clone-tethered).
+STATIC=false
+for arg in "$@"; do
+    case "$arg" in
+        --clean)  echo "Cleaning build directory..."; rm -rf "$BUILD_DIR" ;;
+        --static) STATIC=true ;;
+    esac
+done
 
 mkdir -p "$APP/Contents/MacOS"
 
-echo "Compiling SpeakApp..."
+echo "Compiling SpeakApp$($STATIC && echo ' (static VAD)')..."
+# Link whisper.cpp for the Silero VAD (whisper_vad_* via whisper-bridge.h).
+WHISPER="$SCRIPT_DIR/whisper.cpp"
+LINK=()
+if $STATIC; then
+    # Self-contained: link the static archives install.sh built (build-install).
+    B="$WHISPER/build-install"
+    [ -f "$B/src/libwhisper.a" ] || { echo "ERROR: $B/src/libwhisper.a missing — build whisper-server static first (install.sh does this)"; exit 1; }
+    LINK=(
+        "$B/src/libwhisper.a" "$B/src/libwhisper.coreml.a"
+        "$B/ggml/src/libggml.a" "$B/ggml/src/libggml-cpu.a" "$B/ggml/src/libggml-base.a"
+        "$B/ggml/src/ggml-blas/libggml-blas.a" "$B/ggml/src/ggml-metal/libggml-metal.a"
+        -lc++ -framework Foundation -framework Accelerate -framework Metal
+        -framework MetalKit -framework CoreML
+    )
+else
+    # Dev: link the clone's dylibs by rpath (clone-tethered; not for install).
+    LINK=(
+        -L "$WHISPER/build/src" -L "$WHISPER/build/ggml/src" -lwhisper -lggml -lc++
+        -Xlinker -rpath -Xlinker "$WHISPER/build/src"
+        -Xlinker -rpath -Xlinker "$WHISPER/build/ggml/src"
+        -Xlinker -rpath -Xlinker "$WHISPER/build/ggml/src/ggml-metal"
+        -Xlinker -rpath -Xlinker "$WHISPER/build/ggml/src/ggml-blas"
+    )
+fi
 swiftc \
     -O \
     -target arm64-apple-macos14.0 \
+    -import-objc-header "$SRC_DIR/whisper-bridge.h" \
+    -I "$WHISPER/include" -I "$WHISPER/ggml/include" \
     -o "$APP/Contents/MacOS/SpeakApp" \
-    "$SRC_DIR"/*.swift
+    "$SRC_DIR"/*.swift \
+    "${LINK[@]}"
 
 # Stamp the build with its git commit (short hash, +"-dirty" if the working tree
 # has uncommitted changes). The app reads this (Info.plist → SpeakGitCommit) for

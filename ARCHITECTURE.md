@@ -35,10 +35,13 @@ SpeakApp (Swift, menu bar, LSUIElement)
 ├── ServerManager       owns the resident whisper-server child process
 ├── ReadinessChecker    startup checklist; tails server.log markers; real test inference
 ├── OverlayWindow       floating editor; 🎙️/🧠 marker; smartJoin splicing
-├── SpeechDetector      per-frame speech/silence verdict (protocol). EnergySpeech-
-│                       Detector (broadband RMS gate) today; Silero VAD is the
-│                       planned drop-in. Drives ONLY the visuals + gauge budget —
-│                       gates no audio (the whole WAV is still sent to whisper).
+├── SpeechDetector      speech/silence verdict (protocol, batch classify→[Bool]).
+│                       SileroSpeechDetector (whisper.cpp whisper_vad_*, CPU) live;
+│                       EnergySpeechDetector (RMS) auto-fallback if the model is
+│                       absent. Drives ONLY the visuals + gauge budget — gates no
+│                       audio (the whole WAV is still sent to whisper). Linked via
+│                       whisper-bridge.h; build.sh (dev: clone dylibs by rpath) /
+│                       build.sh --static (install: build-install archives).
 ├── SpectrogramColumnSource  vDSP FFT → dBFS → viridis (speech) / grey (silence)
 │                       columns + a green box around each speech run; accumulates
 │                       the speech budget (producer)

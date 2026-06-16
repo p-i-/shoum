@@ -312,23 +312,35 @@ prebuilt). The §2 thin-app/shared-store model is up for reconsideration.
 > background dispatch, out-of-order box insertion, in-flight cancellation).
 >
 > **BUILT 2026-06-16 — VISUALS ONLY (no culling/chunking wired; whole WAV still
-> sent to whisper):**
-> - `SpeechDetector` protocol = the swap seam. `EnergySpeechDetector` (broadband
->   RMS @ −50 dBFS) is a STAND-IN and already performs great in daily use on
->   100 s+ utterances. Its verdict drives ONLY the spectrogram colours + gauge
->   budget; it gates no audio.
+> sent to whisper). The VAD verdict drives the spectrogram colours + gauge budget
+> only — it gates no audio.**
+> - `SpeechDetector` protocol (batch: `classify(buffer)->[Bool]`).
+>   **`SileroSpeechDetector`** (whisper.cpp `whisper_vad_*`, CPU) is the live
+>   detector; `EnergySpeechDetector` (broadband RMS) is the automatic fallback if
+>   the model can't load. Silero correctly catches the quiet voiced speech the
+>   energy gate greyed out.
+> - `SpectrogramColumnSource` is buffer + TICK-driven: every ~100 ms it re-VADs a
+>   bounded `[emitted−1s … now]` rolling window and emits the freshly-classified
+>   columns (cost independent of clip length; verdicts always warm). Spectrogram +
+>   VAD both run on the 16 kHz stream (64 ms columns → the whole 30 s window fits).
 > - Spectrogram: viridis = speech, grey = silence, green box around each speech run.
 > - `FuelGaugeView`: fill toward the 30 s speech budget (green active / white
 >   paused), one red bar per completed 30 s window, squash-to-fit on overflow.
+> - Build/link: `whisper-bridge.h` (C interop). `build.sh` links the clone's
+>   whisper dylibs by rpath (dev, clone-tethered); `build.sh --static` links the
+>   static `build-install` archives → self-contained binary. `install.sh` builds
+>   `--static`, asserts the app binary has no `@rpath`, and stages the Silero model
+>   (`ggml-silero-v6.2.0.bin`) into the shared store. Verified: link prototype +
+>   headless pipeline (streaming==one-shot) + self-contained otool check.
 >
-> **NEXT — integrate Silero VAD.** The energy gate misses quiet voiced speech
-> (visible as grey-on-clear-speech: faithful to broadband RMS, but RMS is blunt).
-> Swap Silero behind `SpeechDetector`. Scope: link `libwhisper` + a C shim, bundle
-> the Silero ggml (~1 MB), feed the 16 kHz stream (not the 48 kHz spectrogram tap),
-> and evolve the per-frame `classify` into a batch/tick model (Silero is batch, its
-> LSTM resets per call, so re-run over a rolling buffer each tick → per-frame probs
-> we threshold — interface gives a VALUE, we choose the threshold). THEN, optionally,
-> cull-on-stop using the segments.
+> **NEXT (enhancements — parked by the user until after an install.sh test):**
+> - Gauge: turn pink while processing, vanish once text lands.
+> - Axis-as-status colour (yellow idle / grey silence / green speech); maybe split
+>   the spectrogram into mirrored halves around the axis.
+> - Graceful-fallback SIGNAL: a missing Silero model falls back to energy SILENTLY
+>   (only a log line) — surface it to the user.
+> - Optional: cull-on-stop using the segments (send the kebab, not the raw WAV) for
+>   the text-repair + window-budget wins.
 
 **[ORIGINAL PLAN — DEFERRED] Eager background transcription (latency + >30s correctness)**
 

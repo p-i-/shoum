@@ -21,6 +21,7 @@ final class SpectrogramView: NSView {
                 if live { self?.source.resetBudget() } // fresh window each recording
             }
             idleAccumulator = 0
+            tickAccumulator = 0
         }
     }
 
@@ -54,6 +55,11 @@ final class SpectrogramView: NSView {
     /// Exponential smoothing time-constant: bursts of columns spread over ~this.
     private let smoothingTau = 0.10
 
+    /// How often (live) to re-VAD the buffer and emit columns. The display chase
+    /// smooths the resulting ~100 ms emission bursts into continuous scroll.
+    private let tickInterval = 0.10
+    private var tickAccumulator = 0.0
+
     override init(frame: NSRect) {
         ring = ColumnRing(rows: 49, capacity: 512 + 128)
         source = SpectrogramColumnSource(rows: 49, ring: ring)
@@ -76,10 +82,11 @@ final class SpectrogramView: NSView {
 
     // MARK: - Public API (unchanged for callers)
 
-    /// Called from the audio tap (any thread); cheap hand-off to the DSP queue.
-    func push(_ samples: [Float], sampleRate: Double) {
+    /// Called from the audio tap (any thread) with 16 kHz mono samples; cheap
+    /// hand-off to the DSP queue (classification happens on the tick).
+    func push16k(_ samples: [Float]) {
         guard mode == .live else { return }
-        queue.async { [weak self] in self?.source.push(samples, sampleRate: sampleRate) }
+        queue.async { [weak self] in self?.source.push16k(samples) }
     }
 
     /// Wipe the timeline so the next session starts clean.
@@ -92,6 +99,7 @@ final class SpectrogramView: NSView {
         displayPos = 0
         lastEnd = .min
         idleAccumulator = 0
+        tickAccumulator = 0
         stripLayer.contents = nil
         lastReportedSpeech = -1
         lastReportedActive = false
@@ -132,6 +140,13 @@ final class SpectrogramView: NSView {
             while idleAccumulator >= 1 {
                 source.appendFlat()
                 idleAccumulator -= 1
+            }
+        } else {
+            // Live: re-VAD the rolling window and emit new columns every ~tick.
+            tickAccumulator += dt
+            if tickAccumulator >= tickInterval {
+                tickAccumulator = 0
+                queue.async { [weak self] in self?.source.tick() }
             }
         }
 

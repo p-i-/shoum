@@ -1,27 +1,30 @@
 import Accelerate
 import Foundation
 
-/// Turns audio into spectrogram columns: 1024-point FFT → power spectrum →
-/// absolute dBFS → viridis RGBA column, appended to the ring. Pure DSP, no UI.
-/// The dBFS scale is anchored to a full-scale tone (see `fullScaleRefPower`) so
-/// intensity is absolute — silence is dark, loud speech is bright. Runs on the
-/// caller's serial queue.
+/// Turns 16 kHz audio into spectrogram columns: 1024-point FFT → power spectrum →
+/// absolute dBFS → viridis (speech) / grey (silence) RGBA column, with a green box
+/// around each speech run. Pure DSP, no UI. Runs on the caller's serial queue.
+///
+/// Speech/silence comes from a `SpeechDetector` (Silero, energy fallback) run in
+/// a BATCH/TICK model: incoming samples are buffered (`push16k`), and on each
+/// `tick` we re-classify a bounded rolling `[emitted-warmup … now]` window and
+/// emit the freshly-classified columns. The window is bounded by how far emission
+/// trails `now` (one tick), so cost is independent of total recording length —
+/// it scales to minutes of audio. Verdicts used are always "warm" (the LSTM has
+/// `warmup` of lead-in before the first emitted column).
 final class SpectrogramColumnSource {
     let rows: Int
     private let ring: ColumnRing
-
-    /// Per-frame speech/silence verdict — decides viridis vs grey and feeds the
-    /// budget. Swappable (energy now, Silero later); only touched on this queue.
     private let detector: SpeechDetector
 
-    /// Accumulated speech time (seconds) since the last `resetBudget`, for the
-    /// fuel gauge. Written here (DSP queue), read from the display link, so locked.
-    private let budgetLock = NSLock()
-    private var _speechSeconds = 0.0
-
-    private let fftSize = 1024
+    static let sampleRate = 16000
+    private let fftSize = 1024            // 64 ms columns @ 16 kHz
     private let fftLog2n: vDSP_Length = 10
     private let fftSetup = vDSP_create_fftsetup(10, FFTRadix(kFFTRadix2))!
+    private static let warmupSamples = 16000          // 1 s LSTM lead-in
+    private static let maxBufferSamples = 16000 * 360 // 6 min cap (degrade beyond)
+    private static let colRelease = 3                 // hold speech ~3 cols (clean boxes)
+
     private lazy var hann: [Float] = {
         var w = [Float](repeating: 0, count: fftSize)
         vDSP_hann_window(&w, vDSP_Length(fftSize), Int32(vDSP_HANN_NORM))
@@ -29,66 +32,127 @@ final class SpectrogramColumnSource {
     }()
 
     private var rowBins: [(lo: Int, hi: Int)] = []
-    private var pending: [Float] = []
 
-    /// Box-drawing state. Each speech ("good") run gets a green outline. The
-    /// right wall sits on the run's LAST speech column, which we only know once
-    /// the next (silence) column arrives — so we hold one column back to amend it.
-    private var lastSpeech: Bool?     // previous column's verdict (for the left wall)
-    private var heldColumn: [UInt8]?  // column awaiting its possible right wall
+    /// Live 16 kHz sample buffer and how far we've emitted as columns.
+    private var buffer: [Float] = []
+    private var emitted = 0
+
+    /// Box-drawing + smoothing state (across emitted columns).
+    private var lastSpeech: Bool?
+    private var heldColumn: [UInt8]?
     private var heldSpeech = false
+    private var colSilenceRun = 0
+    private var colWasSpeech = false
 
-    /// dBFS floor shown (maps to black); 0 dBFS = full-scale tone. Absolute, no
-    /// auto-gain. brightnessGain lifts the mapped intensity since real mic
-    /// levels never approach a full-scale sine.
+    /// Accumulated speech time for the fuel gauge (written on this queue, read
+    /// from the display link → locked).
+    private let budgetLock = NSLock()
+    private var _speechSeconds = 0.0
+
     private let displayFloorDB: Float = -75
     private let brightnessGain: Float = 2
 
-    /// Column emission rate (columns/sec) = sampleRate / fftSize. Drives the
-    /// idle scroll speed so idle and live match. Default until first audio.
-    private(set) var columnRate: Double = 48000.0 / 1024.0
+    /// Columns/sec = sampleRate / fftSize; drives idle scroll to match live.
+    private(set) var columnRate = Double(sampleRate) / 1024.0
 
-    init(rows: Int, ring: ColumnRing, detector: SpeechDetector = EnergySpeechDetector()) {
+    init(rows: Int, ring: ColumnRing, detector: SpeechDetector? = nil) {
         self.rows = rows
         self.ring = ring
-        self.detector = detector
+        self.detector = detector ?? SpectrogramColumnSource.makeDefaultDetector()
+    }
+
+    /// Silero if its model loads, else the energy gate — so a missing model
+    /// degrades rather than breaks.
+    static func makeDefaultDetector() -> SpeechDetector {
+        if let silero = SileroSpeechDetector(modelPath: Config.vadModelPath) { return silero }
+        return EnergySpeechDetector()
     }
 
     deinit { vDSP_destroy_fftsetup(fftSetup) }
 
-    /// Feed audio; emits as many whole columns as the samples allow. Each frame
-    /// is classified speech/silence: pertinent frames render viridis and add to
-    /// the speech budget; the rest render grey.
-    func push(_ samples: [Float], sampleRate: Double) {
-        if rowBins.isEmpty { computeRowBins(sampleRate: sampleRate) }
-        columnRate = sampleRate / Double(fftSize)
-        pending.append(contentsOf: samples)
-        let frameSeconds = Double(fftSize) / sampleRate
-        while pending.count >= fftSize {
-            let frame = Array(pending.prefix(fftSize))
-            pending.removeFirst(fftSize)
-            let speech = detector.classify(frame, sampleRate: sampleRate)
+    // MARK: - Feed + emit
+
+    /// Buffer 16 kHz mono samples (cheap; classification happens in `tick`).
+    func push16k(_ samples: [Float]) {
+        guard buffer.count < Self.maxBufferSamples else { return }
+        buffer.append(contentsOf: samples)
+    }
+
+    /// Classify the rolling window and emit any newly-classified columns. Call
+    /// periodically (the display link drives it ~every 100 ms in live mode).
+    func tick() {
+        if rowBins.isEmpty { computeRowBins(sampleRate: Double(Self.sampleRate)) }
+        guard emitted + fftSize <= buffer.count else { return } // nothing new
+
+        // Window: enough lead-in to warm the LSTM, through to the latest sample.
+        let winStart = max(0, emitted - Self.warmupSamples)
+        let win = Array(buffer[winStart..<buffer.count])
+        let bools = detector.classify(win)
+        let fs = detector.frameSize
+
+        while emitted + fftSize <= buffer.count {
+            // Raw verdict: any detector frame overlapping [emitted, emitted+fft).
+            let local = emitted - winStart
+            let f0 = local / fs
+            let f1 = (local + fftSize - 1) / fs
+            var raw = false
+            if f0 >= 0, f0 < bools.count { raw = raw || bools[f0] }
+            if f1 >= 0, f1 < bools.count { raw = raw || bools[f1] }
+
+            // Release-hold so brief dips don't fragment the green boxes.
+            let speech: Bool
+            if raw {
+                speech = true; colSilenceRun = 0; colWasSpeech = true
+            } else {
+                colSilenceRun += 1
+                if colWasSpeech, colSilenceRun <= Self.colRelease { speech = true }
+                else { speech = false; colWasSpeech = false }
+            }
+
+            let frame = Array(buffer[emitted..<emitted + fftSize])
             var column = colorColumn(magnitudesDB(frame), speech: speech)
             if speech {
-                drawBoxTopBottom(&column)               // box top/bottom along the run
-                if lastSpeech != true { drawBoxWall(&column) } // left wall: run starts here
+                drawBoxTopBottom(&column)
+                if lastSpeech != true { drawBoxWall(&column) } // left wall
             }
-            // Emit the held (previous) column, closing the box on its right if the
-            // run ended at it (held was speech, this column isn't).
+            // Emit the held (previous) column, closing its right wall if the run
+            // ended at it (one-column holdback).
             if var held = heldColumn {
-                if heldSpeech && !speech { drawBoxWall(&held) } // right wall
+                if heldSpeech, !speech { drawBoxWall(&held) }
                 ring.append(held)
             }
             heldColumn = column
             heldSpeech = speech
             lastSpeech = speech
             if speech {
-                budgetLock.lock(); _speechSeconds += frameSeconds; budgetLock.unlock()
+                budgetLock.lock(); _speechSeconds += Double(fftSize) / Double(Self.sampleRate); budgetLock.unlock()
             }
+            emitted += fftSize
         }
     }
 
-    /// Accumulated speech seconds since the last `resetBudget` (thread-safe read).
+    /// One idle scroll step: black column with the yellow flatline on the centre
+    /// axis (time flows, signal is zero).
+    func appendFlat() {
+        var col = [UInt8](repeating: 0, count: rows * 4)
+        setPixel(&col, rows / 2, (0xFF, 0xD6, 0x0A))
+        ring.append(col)
+    }
+
+    /// Reset for a new recording: drop buffered audio + box/smoothing state.
+    /// Does NOT zero the budget — see `resetBudget`.
+    func resetPending() {
+        buffer.removeAll(keepingCapacity: true)
+        emitted = 0
+        lastSpeech = nil
+        heldColumn = nil
+        heldSpeech = false
+        colSilenceRun = 0
+        colWasSpeech = false
+        detector.reset()
+    }
+
+    /// Accumulated speech seconds since the last `resetBudget` (thread-safe).
     var speechSeconds: Double {
         budgetLock.lock(); defer { budgetLock.unlock() }
         return _speechSeconds
@@ -99,29 +163,10 @@ final class SpectrogramColumnSource {
         budgetLock.lock(); _speechSeconds = 0; budgetLock.unlock()
     }
 
-    /// One scroll step with no signal: black column with the yellow flatline on
-    /// the centre axis (time flows, signal is zero) — overwriting the axis line.
-    func appendFlat() {
-        var col = [UInt8](repeating: 0, count: rows * 4)
-        setPixel(&col, rows / 2, (0xFF, 0xD6, 0x0A))
-        ring.append(col)
-    }
-
-    /// Drop any half-accumulated samples and the detector's running state (on
-    /// mode switch / clear). Does NOT zero the budget — see `resetBudget`.
-    func resetPending() {
-        pending.removeAll()
-        detector.reset()
-        lastSpeech = nil   // no spurious box wall at the start of a recording
-        heldColumn = nil   // drop the held column (one frame, invisible)
-        heldSpeech = false
-    }
-
     // MARK: - DSP
 
-    /// Build a column mirrored about the centre axis: lowest freq adjacent to
-    /// the centre, highest at the top & bottom edges (−maxfreq … 0 … +maxfreq).
-    /// The centre row is a faint axis in live; idle overwrites it with yellow.
+    /// Build a column mirrored about the centre axis: lowest freq adjacent to the
+    /// centre, highest at the top & bottom edges. Speech → viridis, silence → grey.
     private func colorColumn(_ db: [Float], speech: Bool) -> [UInt8] {
         var col = [UInt8](repeating: 0, count: rows * 4)
         let span = -displayFloorDB
@@ -130,9 +175,6 @@ final class SpectrogramColumnSource {
         for i in 0..<rowBins.count {
             let band = db[rowBins[i].lo...rowBins[i].hi].max() ?? -200
             let t = max(0, min(1, (band - displayFloorDB) / span * brightnessGain))
-            // Pertinent (speech) frames get the vivid viridis ramp; non-pertinent
-            // (silence/noise) frames get a dim grey ramp so they recede — the user
-            // can see at a glance what's actually feeding whisper.
             let c: (UInt8, UInt8, UInt8)
             if speech {
                 let rgb = Self.viridis[Int(t * 255)]
@@ -147,8 +189,8 @@ final class SpectrogramColumnSource {
         return col
     }
 
-    /// Green box outline around a "good" (speech) run: top/bottom borders on every
-    /// speech column, and a full-height wall at the run's first and last column.
+    /// Green box outline around a speech run: top/bottom borders on every speech
+    /// column, a full-height wall at the run's first and last column.
     private func drawBoxTopBottom(_ col: inout [UInt8]) {
         setPixel(&col, 0, Self.boxColor); setPixel(&col, 1, Self.boxColor)
         setPixel(&col, rows - 1, Self.boxColor); setPixel(&col, rows - 2, Self.boxColor)
@@ -181,7 +223,6 @@ final class SpectrogramColumnSource {
         }
     }
 
-    /// Linear power spectrum (|FFT|²) of one frame — fftSize/2 bins.
     private func powerSpectrum(_ frame: [Float]) -> [Float] {
         var windowed = [Float](repeating: 0, count: fftSize)
         vDSP_vmul(frame, 1, hann, 1, &windowed, 1, vDSP_Length(fftSize))
@@ -206,10 +247,10 @@ final class SpectrogramColumnSource {
     }
 
     /// 0 dBFS reference: peak power of a full-scale (±1) sine through the EXACT
-    /// same window+FFT path — avoids hand-deriving vDSP's scaling.
+    /// same window+FFT path.
     private lazy var fullScaleRefPower: Float = {
         var sine = [Float](repeating: 0, count: fftSize)
-        let bin = 64.0 // any integer in-band bin
+        let bin = 64.0
         for i in 0..<fftSize {
             sine[i] = Float(sin(2.0 * Double.pi * bin * Double(i) / Double(fftSize)))
         }
@@ -221,12 +262,12 @@ final class SpectrogramColumnSource {
         var db = [Float](repeating: 0, count: fftSize / 2)
         var floorVal: Float = 1e-12
         vDSP_vsadd(mags, 1, &floorVal, &mags, 1, vDSP_Length(fftSize / 2))
-        var ref = fullScaleRefPower // dBFS: 0 dB == full-scale tone
+        var ref = fullScaleRefPower
         vDSP_vdbcon(mags, 1, &ref, &db, 1, vDSP_Length(fftSize / 2), 0)
         return db
     }
 
-    /// Faint neutral line drawn on the centre row in live mode (the 0 axis).
+    /// Faint neutral line drawn on the centre row (the 0 axis).
     static let axisColor: (UInt8, UInt8, UInt8) = (70, 70, 85)
 
     // matplotlib viridis, 256 entries, CC0.

@@ -32,9 +32,9 @@ class AudioRecorder {
     private var rmsSampleCount: Int = 0
     private(set) var lastRMSdBFS: Double = -120
 
-    /// Raw native-format samples from the recording tap, for visualization.
-    /// Called on the audio thread — receivers must hop queues themselves.
-    var onBuffer: ((_ samples: [Float], _ sampleRate: Double) -> Void)?
+    /// 16 kHz mono float samples (the same stream written to the WAV), for the
+    /// spectrogram + VAD. Called on the audio thread — receivers hop queues.
+    var onSamples16k: ((_ samples: [Float]) -> Void)?
 
     /// Touch the input node and preallocate engine resources. Call once at
     /// launch (before any recording) — makes startRecording fast.
@@ -173,11 +173,6 @@ class AudioRecorder {
                 self.rmsSampleCount += count
             }
 
-            if let onBuffer = self.onBuffer, let ch = buffer.floatChannelData?[0] {
-                onBuffer(Array(UnsafeBufferPointer(start: ch, count: Int(buffer.frameLength))),
-                         nativeFormat.sampleRate)
-            }
-
             // Calculate output frame capacity
             let ratio = targetFormat.sampleRate / nativeFormat.sampleRate
             let outputFrameCapacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio)
@@ -205,6 +200,15 @@ class AudioRecorder {
 
             if (status == .haveData || status == .inputRanDry || status == .endOfStream),
                outputBuffer.frameLength > 0 {
+                // Hand the same 16 kHz samples to the spectrogram + VAD (copy out
+                // synchronously before the async file write; both only read).
+                if let onSamples16k = self.onSamples16k, let ip = outputBuffer.int16ChannelData {
+                    let n = Int(outputBuffer.frameLength)
+                    let ch = ip[0]
+                    var f = [Float](repeating: 0, count: n)
+                    for i in 0..<n { f[i] = Float(ch[i]) / 32768.0 }
+                    onSamples16k(f)
+                }
                 self.writeQueue.async {
                     do {
                         try audioFile.write(from: outputBuffer)

@@ -144,6 +144,15 @@ struct Config {
         (samplesDir as NSString).appendingPathComponent("jfk.wav")
     }
 
+    /// Silero VAD model (the small ~1 MB net, NOT whisper). Prefer a canonically
+    /// named copy in the model store; fall back to the fixture shipped in the
+    /// whisper.cpp clone (dev). Stage 2 will bundle a canonical copy at install.
+    static var vadModelPath: String {
+        let canonical = (modelsDir as NSString).appendingPathComponent("ggml-silero-v6.2.0.bin")
+        if FileManager.default.fileExists(atPath: canonical) { return canonical }
+        return resourcePath("whisper.cpp/models/for-tests-silero-v6.2.0-ggml.bin")
+    }
+
     /// The whisper-server binary path the app will use. Existence-agnostic so
     /// callers can both launch it and report it when missing.
     /// Installed → the single staged static binary. Dev → the first build that
