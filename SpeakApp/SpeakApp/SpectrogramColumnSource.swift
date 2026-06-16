@@ -10,6 +10,15 @@ final class SpectrogramColumnSource {
     let rows: Int
     private let ring: ColumnRing
 
+    /// Per-frame speech/silence verdict — decides viridis vs grey and feeds the
+    /// budget. Swappable (energy now, Silero later); only touched on this queue.
+    private let detector: SpeechDetector
+
+    /// Accumulated speech time (seconds) since the last `resetBudget`, for the
+    /// fuel gauge. Written here (DSP queue), read from the display link, so locked.
+    private let budgetLock = NSLock()
+    private var _speechSeconds = 0.0
+
     private let fftSize = 1024
     private let fftLog2n: vDSP_Length = 10
     private let fftSetup = vDSP_create_fftsetup(10, FFTRadix(kFFTRadix2))!
@@ -22,6 +31,13 @@ final class SpectrogramColumnSource {
     private var rowBins: [(lo: Int, hi: Int)] = []
     private var pending: [Float] = []
 
+    /// Box-drawing state. Each speech ("good") run gets a green outline. The
+    /// right wall sits on the run's LAST speech column, which we only know once
+    /// the next (silence) column arrives — so we hold one column back to amend it.
+    private var lastSpeech: Bool?     // previous column's verdict (for the left wall)
+    private var heldColumn: [UInt8]?  // column awaiting its possible right wall
+    private var heldSpeech = false
+
     /// dBFS floor shown (maps to black); 0 dBFS = full-scale tone. Absolute, no
     /// auto-gain. brightnessGain lifts the mapped intensity since real mic
     /// levels never approach a full-scale sine.
@@ -32,23 +48,55 @@ final class SpectrogramColumnSource {
     /// idle scroll speed so idle and live match. Default until first audio.
     private(set) var columnRate: Double = 48000.0 / 1024.0
 
-    init(rows: Int, ring: ColumnRing) {
+    init(rows: Int, ring: ColumnRing, detector: SpeechDetector = EnergySpeechDetector()) {
         self.rows = rows
         self.ring = ring
+        self.detector = detector
     }
 
     deinit { vDSP_destroy_fftsetup(fftSetup) }
 
-    /// Feed audio; emits as many whole columns as the samples allow.
+    /// Feed audio; emits as many whole columns as the samples allow. Each frame
+    /// is classified speech/silence: pertinent frames render viridis and add to
+    /// the speech budget; the rest render grey.
     func push(_ samples: [Float], sampleRate: Double) {
         if rowBins.isEmpty { computeRowBins(sampleRate: sampleRate) }
         columnRate = sampleRate / Double(fftSize)
         pending.append(contentsOf: samples)
+        let frameSeconds = Double(fftSize) / sampleRate
         while pending.count >= fftSize {
             let frame = Array(pending.prefix(fftSize))
             pending.removeFirst(fftSize)
-            ring.append(colorColumn(magnitudesDB(frame)))
+            let speech = detector.classify(frame, sampleRate: sampleRate)
+            var column = colorColumn(magnitudesDB(frame), speech: speech)
+            if speech {
+                drawBoxTopBottom(&column)               // box top/bottom along the run
+                if lastSpeech != true { drawBoxWall(&column) } // left wall: run starts here
+            }
+            // Emit the held (previous) column, closing the box on its right if the
+            // run ended at it (held was speech, this column isn't).
+            if var held = heldColumn {
+                if heldSpeech && !speech { drawBoxWall(&held) } // right wall
+                ring.append(held)
+            }
+            heldColumn = column
+            heldSpeech = speech
+            lastSpeech = speech
+            if speech {
+                budgetLock.lock(); _speechSeconds += frameSeconds; budgetLock.unlock()
+            }
         }
+    }
+
+    /// Accumulated speech seconds since the last `resetBudget` (thread-safe read).
+    var speechSeconds: Double {
+        budgetLock.lock(); defer { budgetLock.unlock() }
+        return _speechSeconds
+    }
+
+    /// Zero the speech budget — call at the start of each recording.
+    func resetBudget() {
+        budgetLock.lock(); _speechSeconds = 0; budgetLock.unlock()
     }
 
     /// One scroll step with no signal: black column with the yellow flatline on
@@ -59,15 +107,22 @@ final class SpectrogramColumnSource {
         ring.append(col)
     }
 
-    /// Drop any half-accumulated samples (on mode switch / clear).
-    func resetPending() { pending.removeAll() }
+    /// Drop any half-accumulated samples and the detector's running state (on
+    /// mode switch / clear). Does NOT zero the budget — see `resetBudget`.
+    func resetPending() {
+        pending.removeAll()
+        detector.reset()
+        lastSpeech = nil   // no spurious box wall at the start of a recording
+        heldColumn = nil   // drop the held column (one frame, invisible)
+        heldSpeech = false
+    }
 
     // MARK: - DSP
 
     /// Build a column mirrored about the centre axis: lowest freq adjacent to
     /// the centre, highest at the top & bottom edges (−maxfreq … 0 … +maxfreq).
     /// The centre row is a faint axis in live; idle overwrites it with yellow.
-    private func colorColumn(_ db: [Float]) -> [UInt8] {
+    private func colorColumn(_ db: [Float], speech: Bool) -> [UInt8] {
         var col = [UInt8](repeating: 0, count: rows * 4)
         let span = -displayFloorDB
         let center = rows / 2
@@ -75,15 +130,35 @@ final class SpectrogramColumnSource {
         for i in 0..<rowBins.count {
             let band = db[rowBins[i].lo...rowBins[i].hi].max() ?? -200
             let t = max(0, min(1, (band - displayFloorDB) / span * brightnessGain))
-            let rgb = Self.viridis[Int(t * 255)]
-            let c: (UInt8, UInt8, UInt8) = (UInt8((rgb >> 16) & 0xFF),
-                                            UInt8((rgb >> 8) & 0xFF),
-                                            UInt8(rgb & 0xFF))
+            // Pertinent (speech) frames get the vivid viridis ramp; non-pertinent
+            // (silence/noise) frames get a dim grey ramp so they recede — the user
+            // can see at a glance what's actually feeding whisper.
+            let c: (UInt8, UInt8, UInt8)
+            if speech {
+                let rgb = Self.viridis[Int(t * 255)]
+                c = (UInt8((rgb >> 16) & 0xFF), UInt8((rgb >> 8) & 0xFF), UInt8(rgb & 0xFF))
+            } else {
+                let g = UInt8(30 + t * 150)
+                c = (g, g, g)
+            }
             setPixel(&col, center - 1 - i, c) // mirror up   (toward +maxfreq)
             setPixel(&col, center + 1 + i, c) // mirror down (toward −maxfreq)
         }
         return col
     }
+
+    /// Green box outline around a "good" (speech) run: top/bottom borders on every
+    /// speech column, and a full-height wall at the run's first and last column.
+    private func drawBoxTopBottom(_ col: inout [UInt8]) {
+        setPixel(&col, 0, Self.boxColor); setPixel(&col, 1, Self.boxColor)
+        setPixel(&col, rows - 1, Self.boxColor); setPixel(&col, rows - 2, Self.boxColor)
+    }
+
+    private func drawBoxWall(_ col: inout [UInt8]) {
+        for r in 0..<rows { setPixel(&col, r, Self.boxColor) }
+    }
+
+    static let boxColor: (UInt8, UInt8, UInt8) = (50, 235, 100)
 
     private func setPixel(_ col: inout [UInt8], _ row: Int, _ rgb: (UInt8, UInt8, UInt8)) {
         guard row >= 0, row < rows else { return }

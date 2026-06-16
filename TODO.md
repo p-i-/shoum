@@ -286,10 +286,56 @@ prebuilt). The §2 thin-app/shared-store model is up for reconsideration.
 
 ---
 
-## 3. NEXT ARC — Eager background transcription (latency + >30s correctness)
+## 3. ACTIVE ARC — Speech-aware feedback: VAD culling + a fuel gauge
+
+> **DIRECTION REVISED 2026-06-16.** The original "eager background transcription"
+> plan (preserved below, still valid if revisited) is DEFERRED in favour of a far
+> simpler v1. Full reasoning in memory `vad-chunking-findings`.
+>
+> **Measured (`tools/vad_lab.py`, `tools/chunk_sim.py`, real `/tmp/speak/wavs`):**
+> - ~55% of this user's audio is silence; VAD culling REPAIRS text (cleaner
+>   punctuation from clean pauses) and is content-preserving.
+> - The encoder is a FIXED ~700 ms pass per 30 s window (mel zero-padded to 3000;
+>   CoreML fixed-shape). For typical SHORT clips encode DOMINATES (~76%); decode
+>   only overtakes at hundreds of tokens. So culling buys ~no speed (it only saves
+>   a WHOLE window when it drops audio under 30 s of speech); its real value is
+>   text-repair + WINDOW BUDGET — pack ~60–100 s of pausey wall-clock into one
+>   30 s SPEECH window.
+> - Chunk-by-chunk cold decoding ≈ whole-utterance (97.7% word-sim; diffs are seam
+>   punctuation only). Prompt-carry and "longest-gap" cut policies measured
+>   useless → dropped.
+>
+> **v1 PLAN (decided):** don't chunk. Cull silence + show a FUEL GAUGE of how full
+> the 30 s SPEECH window is; the user self-regulates (best results stay in one
+> window). On overflow, whisper handles >30 s natively — degrade, don't optimize
+> ("outside operational limits"). This DELETES the hard machinery (cut policy,
+> background dispatch, out-of-order box insertion, in-flight cancellation).
+>
+> **BUILT 2026-06-16 — VISUALS ONLY (no culling/chunking wired; whole WAV still
+> sent to whisper):**
+> - `SpeechDetector` protocol = the swap seam. `EnergySpeechDetector` (broadband
+>   RMS @ −50 dBFS) is a STAND-IN and already performs great in daily use on
+>   100 s+ utterances. Its verdict drives ONLY the spectrogram colours + gauge
+>   budget; it gates no audio.
+> - Spectrogram: viridis = speech, grey = silence, green box around each speech run.
+> - `FuelGaugeView`: fill toward the 30 s speech budget (green active / white
+>   paused), one red bar per completed 30 s window, squash-to-fit on overflow.
+>
+> **NEXT — integrate Silero VAD.** The energy gate misses quiet voiced speech
+> (visible as grey-on-clear-speech: faithful to broadband RMS, but RMS is blunt).
+> Swap Silero behind `SpeechDetector`. Scope: link `libwhisper` + a C shim, bundle
+> the Silero ggml (~1 MB), feed the 16 kHz stream (not the 48 kHz spectrogram tap),
+> and evolve the per-frame `classify` into a batch/tick model (Silero is batch, its
+> LSTM resets per call, so re-run over a rolling buffer each tick → per-frame probs
+> we threshold — interface gives a VALUE, we choose the threshold). THEN, optionally,
+> cull-on-stop using the segments.
+
+**[ORIGINAL PLAN — DEFERRED] Eager background transcription (latency + >30s correctness)**
 
 **Big architectural change; hand to a FRESH agent after v1 (§2) is installed +
-committed.** This is the planned post-v1 overhaul. Read this whole entry first.
+committed.** This was the planned post-v1 overhaul; superseded for v1 by the
+fuel-gauge approach above, but kept intact as the path for true background
+transcription if on-stop latency ever justifies it.
 
 ### Why (evidence, measured 2026-06-14 from log.txt)
 We currently record ONE continuous WAV (`AudioRecorder`, start→stop) and send it

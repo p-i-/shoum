@@ -15,10 +15,25 @@ final class SpectrogramView: NSView {
     var mode: Mode = .idle {
         didSet {
             guard mode != oldValue else { return }
-            queue.async { [weak self] in self?.source.resetPending() }
+            let live = (mode == .live)
+            queue.async { [weak self] in
+                self?.source.resetPending()
+                if live { self?.source.resetBudget() } // fresh window each recording
+            }
             idleAccumulator = 0
         }
     }
+
+    /// Emitted (main thread) with (accumulated speech seconds, actively-capturing)
+    /// — drives the fuel gauge. Set by the owner.
+    var onSpeechBudgetUpdate: ((Double, Bool) -> Void)?
+    private var lastReportedSpeech = -1.0
+    private var lastReportedActive = false
+    private var lastSpeechValue = 0.0
+    private var lastSpeechIncreaseTime: CFTimeInterval = -1
+    /// Stay "active" this long after the last speech increment (bridges the gaps
+    /// between bursty column deliveries so the fill doesn't flicker).
+    private let activeHold = 0.15
 
     private let rows = 49 // odd → a true centre row for the mirror axis
     private let visibleCols = 512
@@ -69,12 +84,20 @@ final class SpectrogramView: NSView {
 
     /// Wipe the timeline so the next session starts clean.
     func clear() {
-        queue.async { [weak self] in self?.source.resetPending() }
+        queue.async { [weak self] in
+            self?.source.resetPending()
+            self?.source.resetBudget()
+        }
         ring.reset()
         displayPos = 0
         lastEnd = .min
         idleAccumulator = 0
         stripLayer.contents = nil
+        lastReportedSpeech = -1
+        lastReportedActive = false
+        lastSpeechValue = 0
+        lastSpeechIncreaseTime = -1
+        onSpeechBudgetUpdate?(0, false)
     }
 
     // MARK: - Display link lifecycle
@@ -126,6 +149,18 @@ final class SpectrogramView: NSView {
             ring.compose(endColumn: end, width: visibleCols + 1, into: &composeBuf)
             stripLayer.contents = makeImage()
             lastEnd = end
+        }
+
+        // Report speech budget + active state. "Active" = speech climbed recently
+        // (within activeHold); the gauge only redraws on an actual change.
+        let speech = source.speechSeconds
+        if speech > lastSpeechValue { lastSpeechIncreaseTime = now }
+        lastSpeechValue = speech
+        let active = (now - lastSpeechIncreaseTime) < activeHold
+        if speech != lastReportedSpeech || active != lastReportedActive {
+            lastReportedSpeech = speech
+            lastReportedActive = active
+            onSpeechBudgetUpdate?(speech, active)
         }
 
         // Sub-pixel scroll: translate the (1-column-wider) strip left by the

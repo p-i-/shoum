@@ -5,3 +5,6 @@ build/
 log.txt
 server.log
 whisper.cpp/
+
+# Python bytecode from tools/
+__pycache__/

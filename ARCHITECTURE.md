@@ -35,9 +35,19 @@ SpeakApp (Swift, menu bar, LSUIElement)
 ├── ServerManager       owns the resident whisper-server child process
 ├── ReadinessChecker    startup checklist; tails server.log markers; real test inference
 ├── OverlayWindow       floating editor; 🎙️/🧠 marker; smartJoin splicing
-├── SpectrogramColumnSource  vDSP FFT → absolute dBFS → viridis columns (producer)
+├── SpeechDetector      per-frame speech/silence verdict (protocol). EnergySpeech-
+│                       Detector (broadband RMS gate) today; Silero VAD is the
+│                       planned drop-in. Drives ONLY the visuals + gauge budget —
+│                       gates no audio (the whole WAV is still sent to whisper).
+├── SpectrogramColumnSource  vDSP FFT → dBFS → viridis (speech) / grey (silence)
+│                       columns + a green box around each speech run; accumulates
+│                       the speech budget (producer)
 ├── ColumnRing          lock-protected ring of RGBA columns (producer↔consumer)
-├── SpectrogramView     CADisplayLink consumer; sub-pixel continuous scroll
+├── SpectrogramView     CADisplayLink consumer; sub-pixel scroll; emits speech-
+│                       budget updates (seconds + active) to the fuel gauge
+├── FuelGaugeView       speech-budget meter: fill toward the 30s whisper window
+│                       (green active / white paused), a red bar per completed
+│                       window, squash-to-fit on overflow
 ├── SplashWindow        tabbed Status/Settings window
 └── ClipboardManager    remember/refocus frontmost app; paste via ⌘V
 ```

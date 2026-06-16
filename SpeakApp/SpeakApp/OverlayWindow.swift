@@ -6,6 +6,7 @@ class OverlayWindow {
     private(set) var textView: NSTextView
     private let scrollView: NSScrollView
     let spectrogram = SpectrogramView(frame: .zero)
+    let fuelGauge = FuelGaugeView(frame: .zero)
 
     /// Marks the in-text recording indicator so it can be found and replaced
     /// even if the user edits around it. Never matched by glyph — the user
@@ -57,6 +58,8 @@ class OverlayWindow {
 
         // Spectrogram strip at top (state display: live / frozen / flatline)
         spectrogram.translatesAutoresizingMaskIntoConstraints = false
+        // Speech-budget fuel gauge directly beneath it, half its height.
+        fuelGauge.translatesAutoresizingMaskIntoConstraints = false
 
         // Text view in scroll view
         textView = NSTextView()
@@ -94,6 +97,7 @@ class OverlayWindow {
 
         // Layout
         visualEffectView.addSubview(spectrogram)
+        visualEffectView.addSubview(fuelGauge)
         visualEffectView.addSubview(scrollView)
         panel.contentView = visualEffectView
 
@@ -103,11 +107,23 @@ class OverlayWindow {
             spectrogram.trailingAnchor.constraint(equalTo: visualEffectView.trailingAnchor, constant: -12),
             spectrogram.heightAnchor.constraint(equalToConstant: 36),
 
-            scrollView.topAnchor.constraint(equalTo: spectrogram.bottomAnchor, constant: 8),
+            fuelGauge.topAnchor.constraint(equalTo: spectrogram.bottomAnchor, constant: 4),
+            fuelGauge.leadingAnchor.constraint(equalTo: spectrogram.leadingAnchor),
+            fuelGauge.trailingAnchor.constraint(equalTo: spectrogram.trailingAnchor),
+            fuelGauge.heightAnchor.constraint(equalToConstant: 4),
+
+            scrollView.topAnchor.constraint(equalTo: fuelGauge.bottomAnchor, constant: 8),
             scrollView.leadingAnchor.constraint(equalTo: visualEffectView.leadingAnchor, constant: 12),
             scrollView.trailingAnchor.constraint(equalTo: visualEffectView.trailingAnchor, constant: -12),
             scrollView.bottomAnchor.constraint(equalTo: visualEffectView.bottomAnchor, constant: -12),
         ])
+
+        // The gauge's inputs: accumulated speech seconds + whether we're actively
+        // capturing right now (drives the green/white fill).
+        spectrogram.onSpeechBudgetUpdate = { [weak self] seconds, active in
+            self?.fuelGauge.speechSeconds = seconds
+            self?.fuelGauge.active = active
+        }
     }
 
     /// Float above other apps (default) so the box appears over whatever you're
