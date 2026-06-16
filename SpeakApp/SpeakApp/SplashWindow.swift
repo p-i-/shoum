@@ -29,6 +29,7 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
     private let holdReleaseField = NSTextField()
     private let hotkeyPopup = NSPopUpButton()
     private let soundsCheckbox = NSButton(checkboxWithTitle: "Sound feedback", target: nil, action: nil)
+    private let pruneCheckbox = NSButton(checkboxWithTitle: "Prune dead audio (VAD removes silence before transcribing)", target: nil, action: nil)
     private let pasteModePopup = NSPopUpButton()
     private let loginCheckbox = NSButton(checkboxWithTitle: "Start at login", target: nil, action: nil)
     private let promptTextView = NSTextView()
@@ -188,6 +189,7 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
         useANECheckbox.state = cfg.useANE ? .on : .off
         portField.stringValue = String(cfg.serverPort)
         soundsCheckbox.state = cfg.sounds ? .on : .off
+        pruneCheckbox.state = cfg.pruneDeadAudio ? .on : .off
         doubleTapField.stringValue = String(cfg.doubleTapWindowMs)
         tapMaxField.stringValue = String(cfg.tapMaxMs)
         holdReleaseField.stringValue = String(cfg.holdReleaseMs)
@@ -213,7 +215,7 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
         for popup in [logLevelPopup, pasteModePopup, hotkeyPopup] {
             popup.target = self; popup.action = #selector(settingChanged)
         }
-        for box in [useANECheckbox, soundsCheckbox] {
+        for box in [useANECheckbox, soundsCheckbox, pruneCheckbox] {
             box.target = self; box.action = #selector(settingChanged)
         }
 
@@ -228,6 +230,7 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
         stack.addArrangedSubview(formRow("Hotkey", hotkeyPopup))
         stack.addArrangedSubview(formRow("Paste mode", pasteModePopup))
         stack.addArrangedSubview(soundsCheckbox)
+        stack.addArrangedSubview(pruneCheckbox)
 
         // Start at login — only meaningful for an installed app (registering the
         // dev build's path would point the login item at the clone).
@@ -477,6 +480,7 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
             "hold_release_ms": t(holdReleaseField),
             "hotkey_keycode": String(hotkeyPopup.selectedItem?.tag ?? 56),
             "sounds": soundsCheckbox.state == .on ? "true" : "false",
+            "prune_dead_audio": pruneCheckbox.state == .on ? "true" : "false",
             "paste_mode": pasteModePopup.titleOfSelectedItem ?? "paste",
         ]
     }

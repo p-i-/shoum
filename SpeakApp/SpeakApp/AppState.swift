@@ -18,6 +18,7 @@ class AppStateCoordinator: KeyMonitorDelegate {
 
     private(set) var currentState: SpeakState = .idle {
         didSet {
+            Log.info("[AppState] state \(oldValue) → \(currentState)")
             // Only in editing do tap (paste) and double-tap (new chunk) both
             // apply, so only there must single taps wait out the double-tap
             // window. Everywhere else taps fire instantly.
@@ -28,6 +29,7 @@ class AppStateCoordinator: KeyMonitorDelegate {
 
     private let audioRecorder = AudioRecorder()
     private let transcriber = Transcriber()
+    private let silenceCuller = SilenceCuller()
     private let overlayWindow = OverlayWindow()
     private let clipboardManager = ClipboardManager()
     private let keyMonitor = KeyMonitor()
@@ -132,6 +134,7 @@ class AppStateCoordinator: KeyMonitorDelegate {
     // MARK: - KeyMonitorDelegate
 
     func keyMonitorDidDetectDoubleTap() {
+        Log.info("[AppState] gesture: DOUBLE-TAP (state=\(currentState))")
         switch currentState {
         case .idle:
             guard readiness.isReady else {
@@ -143,24 +146,28 @@ class AppStateCoordinator: KeyMonitorDelegate {
         case .editing:
             startRecording(isFirstChunk: false)
         case .recording, .processing:
-            // Ignore
-            break
+            Log.info("[AppState] double-tap IGNORED (state=\(currentState))")
         }
     }
 
     func keyMonitorDidDetectTap() {
+        Log.info("[AppState] gesture: TAP (state=\(currentState))")
         switch currentState {
         case .recording:
             stopRecordingAndTranscribe()
         case .editing:
             confirmAndPaste()
         case .idle, .processing:
-            break
+            Log.info("[AppState] tap IGNORED (state=\(currentState))")
         }
     }
 
     func keyMonitorDidDetectHoldRelease() {
-        guard currentState == .recording else { return }
+        Log.info("[AppState] gesture: HOLD-RELEASE (state=\(currentState))")
+        guard currentState == .recording else {
+            Log.info("[AppState] hold-release IGNORED (state=\(currentState))")
+            return
+        }
         stopRecordingAndTranscribe()
     }
 
@@ -224,16 +231,43 @@ class AppStateCoordinator: KeyMonitorDelegate {
         overlayWindow.markProcessing()
         currentState = .processing
 
-        transcriber.transcribe(wavFile: wavURL) { [weak self] result in
+        // Off the main thread: optionally VAD-cull silence (prune_dead_audio) into
+        // a kebab, then transcribe. Culling can also reveal there's no speech at
+        // all → skip whisper. Both cull + transcribe run in the background; the
+        // transcriber completes back on main.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
 
-            self.cleanupRecording(wavURL)
+            var sendURL = wavURL
+            var culledURL: URL?
+            if Config.shared.pruneDeadAudio {
+                switch self.silenceCuller.cull(wavURL) {
+                case .culled(let url): sendURL = url; culledURL = url
+                case .noSpeech:
+                    DispatchQueue.main.async {
+                        Log.info("[AppState] VAD found no speech — skipping whisper")
+                        self.cleanupRecording(wavURL)
+                        self.playSound(.subtle)
+                        self.overlayWindow.finish(with: nil)
+                        self.overlayWindow.show()
+                        self.currentState = .editing
+                    }
+                    return
+                case .unavailable:
+                    Log.info("[AppState] cull unavailable — sending raw audio")
+                }
+            }
 
-            switch result {
-            case .success(let text):
-                self.handleTranscriptionSuccess(text)
-            case .failure(let error):
-                self.handleTranscriptionError(error)
+            self.transcriber.transcribe(wavFile: sendURL) { result in
+                self.cleanupRecording(wavURL)
+                if let culledURL = culledURL { self.cleanupRecording(culledURL) }
+
+                switch result {
+                case .success(let text):
+                    self.handleTranscriptionSuccess(text)
+                case .failure(let error):
+                    self.handleTranscriptionError(error)
+                }
             }
         }
     }
@@ -265,7 +299,9 @@ class AppStateCoordinator: KeyMonitorDelegate {
 
     private func confirmAndPaste() {
         let text = overlayWindow.getText()
+        Log.info("[AppState] confirmAndPaste: \(text.count) chars in box")
         guard !text.isEmpty else {
+            Log.info("[AppState] confirmAndPaste: empty box → hiding")
             overlayWindow.hide()
             clipboardManager.refocusRememberedApp()
             currentState = .idle

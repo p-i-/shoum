@@ -1,66 +1,26 @@
 import Foundation
 
-/// Classifies 16 kHz mono audio as speech ("pertinent") or not. The spectrogram
-/// paints pertinent frames viridis (silence grey) and the fuel gauge counts
-/// pertinent time toward the 30 s whisper-window budget.
+/// Silero VAD (whisper.cpp's `whisper_vad_*`), run on CPU. The single speech
+/// detector: a trained net that recognizes speech structure, so it catches quiet
+/// voiced speech a crude energy gate would miss. Used two ways:
+///   • the spectrogram calls `classify` for per-frame viridis/grey + the gauge;
+///   • the silence culler calls `speechSegments` to build the kebab sent to whisper.
 ///
-/// Batch interface: hand it a contiguous buffer, get one bool per `frameSize`
-/// samples. Stateful detectors (Silero, whose LSTM resets each call) should be
-/// fed the buffer with lead-in context — the caller re-runs over a rolling
-/// `[emitted-warmup … now]` window each tick, so the verdicts it actually uses
-/// are always warm.
+/// There is deliberately NO energy fallback: if Silero can't load we'd rather not
+/// cull at all (send raw audio — safe) than prune with a blunt detector that drops
+/// quiet speech. Callers treat a nil detector as "VAD unavailable".
 ///
-/// Called only on the spectrogram's serial DSP queue → no internal locking.
-protocol SpeechDetector: AnyObject {
-    /// Samples per verdict (at 16 kHz).
-    var frameSize: Int { get }
-    /// One bool per `frameSize` samples of `buffer` (floor(count/frameSize)).
-    func classify(_ buffer: [Float]) -> [Bool]
-    func reset()
-}
-
-/// Broadband RMS-energy gate. Cheap, instant, and good enough on a clean signal,
-/// but misses quiet voiced speech (low broadband RMS even when harmonics are
-/// strong) — which is why Silero is preferred. Kept as the always-available
-/// fallback when the Silero model can't be loaded.
-final class EnergySpeechDetector: SpeechDetector {
-    let frameSize = 512 // 32 ms @ 16 kHz, matching Silero's frame so verdicts align
-    private let thresholdDBFS: Float
-    init(thresholdDBFS: Float = -50) { self.thresholdDBFS = thresholdDBFS }
-
-    func classify(_ buffer: [Float]) -> [Bool] {
-        let n = buffer.count / frameSize
-        guard n > 0 else { return [] }
-        var out = [Bool](repeating: false, count: n)
-        buffer.withUnsafeBufferPointer { b in
-            for i in 0..<n {
-                var sum: Float = 0
-                let base = i * frameSize
-                for j in 0..<frameSize { let v = b[base + j]; sum += v * v }
-                let rms = (sum / Float(frameSize)).squareRoot()
-                let db: Float = rms > 0 ? 20 * log10(rms) : -120
-                out[i] = db >= thresholdDBFS
-            }
-        }
-        return out
-    }
-
-    func reset() {}
-}
-
-/// Silero VAD (whisper.cpp's `whisper_vad_*`), run on CPU. A trained net that
-/// recognizes speech structure, so it catches the quiet voiced speech the energy
-/// gate misses. Per-frame probabilities thresholded into bools.
-final class SileroSpeechDetector: SpeechDetector {
+/// Each instance owns a whisper_vad_context (its LSTM resets on every detect
+/// call) and is single-threaded — give each user (spectrogram, culler) its own.
+final class SileroSpeechDetector {
     let frameSize = 512 // Silero v5/v6 window @ 16 kHz
     private let ctx: OpaquePointer
     private let threshold: Float
 
-    /// Fails (returns nil) if the model can't be loaded — caller falls back to
-    /// the energy gate, so a missing model degrades rather than breaks.
+    /// Fails (nil) if the model can't be loaded — caller degrades (no cull / grey).
     init?(modelPath: String, threshold: Float = 0.5) {
         guard FileManager.default.fileExists(atPath: modelPath) else {
-            Log.info("[Silero] model not found at \(modelPath) — falling back to energy gate")
+            Log.error("[Silero] model not found at \(modelPath) — VAD unavailable (no cull, grey spectrogram)")
             return nil
         }
         var cp = whisper_vad_default_context_params()
@@ -75,12 +35,12 @@ final class SileroSpeechDetector: SpeechDetector {
         Log.info("[Silero] VAD loaded from \(modelPath)")
     }
 
+    deinit { whisper_vad_free(ctx) }
+
+    /// Per-frame speech verdict (one bool per `frameSize` samples). For the
+    /// spectrogram colouring. Empty if the buffer is too short.
     func classify(_ buffer: [Float]) -> [Bool] {
-        guard buffer.count >= frameSize else { return [] }
-        let ok = buffer.withUnsafeBufferPointer {
-            whisper_vad_detect_speech(ctx, $0.baseAddress, Int32($0.count))
-        }
-        guard ok else { return [] }
+        guard detect(buffer) else { return [] }
         let n = Int(whisper_vad_n_probs(ctx))
         guard n > 0, let p = whisper_vad_probs(ctx) else { return [] }
         var out = [Bool](repeating: false, count: n)
@@ -88,7 +48,31 @@ final class SileroSpeechDetector: SpeechDetector {
         return out
     }
 
-    func reset() {} // the LSTM resets inside each detect call anyway
+    /// Speech segments as 16 kHz sample ranges, with Silero's own min-duration +
+    /// padding post-processing — for building the culled kebab. Empty if no speech.
+    func speechSegments(_ buffer: [Float]) -> [(start: Int, end: Int)] {
+        guard detect(buffer) else { return [] }
+        var p = whisper_vad_default_params()
+        p.threshold = threshold
+        // min_speech_duration_ms / min_silence_duration_ms / speech_pad_ms keep
+        // their sane defaults (250 / 100 / 30) so segments don't clip word edges.
+        guard let segs = whisper_vad_segments_from_probs(ctx, p) else { return [] }
+        defer { whisper_vad_free_segments(segs) }
+        let n = Int(whisper_vad_segments_n_segments(segs))
+        var out = [(start: Int, end: Int)]()
+        out.reserveCapacity(n)
+        for i in 0..<n {
+            let t0 = whisper_vad_segments_get_segment_t0(segs, Int32(i)) // centiseconds
+            let t1 = whisper_vad_segments_get_segment_t1(segs, Int32(i))
+            out.append((Int(Double(t0) / 100.0 * 16000), Int(Double(t1) / 100.0 * 16000)))
+        }
+        return out
+    }
 
-    deinit { whisper_vad_free(ctx) }
+    private func detect(_ buffer: [Float]) -> Bool {
+        guard buffer.count >= frameSize else { return false }
+        return buffer.withUnsafeBufferPointer {
+            whisper_vad_detect_speech(ctx, $0.baseAddress, Int32($0.count))
+        }
+    }
 }

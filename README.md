@@ -113,6 +113,7 @@ back to defaults.
 | `paste_mode` | `paste` | `paste` = ⌘V into previous app; `copy` = clipboard only |
 | `keep_recordings` | `true` | retain WAVs in `/tmp/speak/wavs` for 24h (debugging) |
 | `min_speech_dbfs` | `-60` | clips never louder than this are treated as no-speech (skip whisper) |
+| `prune_dead_audio` | `true` | Silero VAD removes silence before transcribing (cleaner punctuation; more speech per 30s window). Falls back to sending raw audio if the VAD model is missing |
 | `check_for_updates` | `true` | check GitHub on launch; notify in the menu if a newer build exists |
 
 Vocabulary biasing lives in `prompt.txt` (free prose; whisper takes ~220 tokens

@@ -15,7 +15,9 @@ import Foundation
 final class SpectrogramColumnSource {
     let rows: Int
     private let ring: ColumnRing
-    private let detector: SpeechDetector
+    /// nil when Silero couldn't load → all frames render grey, gauge stays empty
+    /// (a visible "VAD unavailable" state).
+    private let detector: SileroSpeechDetector?
 
     static let sampleRate = 16000
     private let fftSize = 1024            // 64 ms columns @ 16 kHz
@@ -55,17 +57,10 @@ final class SpectrogramColumnSource {
     /// Columns/sec = sampleRate / fftSize; drives idle scroll to match live.
     private(set) var columnRate = Double(sampleRate) / 1024.0
 
-    init(rows: Int, ring: ColumnRing, detector: SpeechDetector? = nil) {
+    init(rows: Int, ring: ColumnRing, detector: SileroSpeechDetector? = SileroSpeechDetector(modelPath: Config.vadModelPath)) {
         self.rows = rows
         self.ring = ring
-        self.detector = detector ?? SpectrogramColumnSource.makeDefaultDetector()
-    }
-
-    /// Silero if its model loads, else the energy gate — so a missing model
-    /// degrades rather than breaks.
-    static func makeDefaultDetector() -> SpeechDetector {
-        if let silero = SileroSpeechDetector(modelPath: Config.vadModelPath) { return silero }
-        return EnergySpeechDetector()
+        self.detector = detector
     }
 
     deinit { vDSP_destroy_fftsetup(fftSetup) }
@@ -85,10 +80,11 @@ final class SpectrogramColumnSource {
         guard emitted + fftSize <= buffer.count else { return } // nothing new
 
         // Window: enough lead-in to warm the LSTM, through to the latest sample.
+        // No detector (Silero unavailable) → empty verdicts → all columns grey.
         let winStart = max(0, emitted - Self.warmupSamples)
         let win = Array(buffer[winStart..<buffer.count])
-        let bools = detector.classify(win)
-        let fs = detector.frameSize
+        let bools = detector?.classify(win) ?? []
+        let fs = detector?.frameSize ?? 512
 
         while emitted + fftSize <= buffer.count {
             // Raw verdict: any detector frame overlapping [emitted, emitted+fft).
@@ -139,6 +135,18 @@ final class SpectrogramColumnSource {
         ring.append(col)
     }
 
+    /// Close out the held column at end of recording: the run has ended, so if it
+    /// was a speech column draw its right wall, then append it. Call BEFORE
+    /// `resetPending` on stop — otherwise a run left "open" at stop (its closing
+    /// silence column never arrived) loses its right wall when the held column is
+    /// dropped.
+    func flush() {
+        guard var held = heldColumn else { return }
+        if heldSpeech { drawBoxWall(&held) }
+        ring.append(held)
+        heldColumn = nil
+    }
+
     /// Reset for a new recording: drop buffered audio + box/smoothing state.
     /// Does NOT zero the budget — see `resetBudget`.
     func resetPending() {
@@ -149,7 +157,6 @@ final class SpectrogramColumnSource {
         heldSpeech = false
         colSilenceRun = 0
         colWasSpeech = false
-        detector.reset()
     }
 
     /// Accumulated speech seconds since the last `resetBudget` (thread-safe).

@@ -35,13 +35,14 @@ SpeakApp (Swift, menu bar, LSUIElement)
 ├── ServerManager       owns the resident whisper-server child process
 ├── ReadinessChecker    startup checklist; tails server.log markers; real test inference
 ├── OverlayWindow       floating editor; 🎙️/🧠 marker; smartJoin splicing
-├── SpeechDetector      speech/silence verdict (protocol, batch classify→[Bool]).
-│                       SileroSpeechDetector (whisper.cpp whisper_vad_*, CPU) live;
-│                       EnergySpeechDetector (RMS) auto-fallback if the model is
-│                       absent. Drives ONLY the visuals + gauge budget — gates no
-│                       audio (the whole WAV is still sent to whisper). Linked via
-│                       whisper-bridge.h; build.sh (dev: clone dylibs by rpath) /
-│                       build.sh --static (install: build-install archives).
+├── SileroSpeechDetector  the speech/silence VAD (whisper.cpp whisper_vad_*, CPU,
+│                       linked via whisper-bridge.h). classify→[Bool] for the
+│                       spectrogram colours + gauge; speechSegments→ranges for the
+│                       culler. No energy fallback: if the model can't load, the
+│                       spectrogram greys out and culling is skipped (raw audio
+│                       sent). build.sh (dev: clone dylibs) / --static (install).
+├── SilenceCuller       on stop, re-VADs the recording and writes a silence-removed
+│                       "kebab" WAV (prune_dead_audio) — only speech reaches whisper.
 ├── SpectrogramColumnSource  vDSP FFT → dBFS → viridis (speech) / grey (silence)
 │                       columns + a green box around each speech run; accumulates
 │                       the speech budget (producer)

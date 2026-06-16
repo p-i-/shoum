@@ -17,6 +17,7 @@ final class SpectrogramView: NSView {
             guard mode != oldValue else { return }
             let live = (mode == .live)
             queue.async { [weak self] in
+                if !live { self?.source.flush() } // close the final box before resetting
                 self?.source.resetPending()
                 if live { self?.source.resetBudget() } // fresh window each recording
             }

@@ -47,6 +47,12 @@ paste_mode: paste
 # then auto-pruned. Set false to delete each clip right after transcription.
 keep_recordings: true
 
+# Prune dead (non-speech) audio before sending to whisper: Silero VAD removes
+# silence so only speech is transcribed — cleaner punctuation and far more speech
+# fits in whisper's 30s window. Needs the Silero model; if it's missing the raw
+# audio is sent unchanged. Set false to always send the full recording.
+prune_dead_audio: true
+
 # Recordings whose loudness never rises above this (dBFS) are treated as
 # no-speech and skipped — whisper hallucinates "Thank you" on silence. Measured
 # silence sits ~-80 dBFS, real speech ~-25. Raise toward 0 to gate more

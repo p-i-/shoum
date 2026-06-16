@@ -311,14 +311,12 @@ prebuilt). The §2 thin-app/shared-store model is up for reconsideration.
 > ("outside operational limits"). This DELETES the hard machinery (cut policy,
 > background dispatch, out-of-order box insertion, in-flight cancellation).
 >
-> **BUILT 2026-06-16 — VISUALS ONLY (no culling/chunking wired; whole WAV still
-> sent to whisper). The VAD verdict drives the spectrogram colours + gauge budget
-> only — it gates no audio.**
-> - `SpeechDetector` protocol (batch: `classify(buffer)->[Bool]`).
->   **`SileroSpeechDetector`** (whisper.cpp `whisper_vad_*`, CPU) is the live
->   detector; `EnergySpeechDetector` (broadband RMS) is the automatic fallback if
->   the model can't load. Silero correctly catches the quiet voiced speech the
->   energy gate greyed out.
+> **BUILT 2026-06-16:**
+> - **`SileroSpeechDetector`** (whisper.cpp `whisper_vad_*`, CPU) is the ONLY
+>   detector — the energy gate was removed (it would silently prune quiet voiced
+>   speech once culling gates audio; a footgun, not a safe fallback). If Silero
+>   can't load: spectrogram greys out + culling is skipped (raw audio sent).
+>   `classify->[Bool]` drives the visuals; `speechSegments->ranges` drives the culler.
 > - `SpectrogramColumnSource` is buffer + TICK-driven: every ~100 ms it re-VADs a
 >   bounded `[emitted−1s … now]` rolling window and emits the freshly-classified
 >   columns (cost independent of clip length; verdicts always warm). Spectrogram +
@@ -326,6 +324,12 @@ prebuilt). The §2 thin-app/shared-store model is up for reconsideration.
 > - Spectrogram: viridis = speech, grey = silence, green box around each speech run.
 > - `FuelGaugeView`: fill toward the 30 s speech budget (green active / white
 >   paused), one red bar per completed 30 s window, squash-to-fit on overflow.
+> - **CULL-ON-STOP (`SilenceCuller`, `prune_dead_audio` config, default on):** on
+>   stop, re-VAD the recording and send a silence-removed "kebab" to whisper
+>   instead of the raw WAV — so the VAD now actually IMPROVES transcription (the
+>   measured punctuation repair + real 30 s window budget), not just the visuals.
+>   0 segments → treated as no-speech (skip). Validated end-to-end: kebab
+>   transcribes to identical words, cleaner punctuation.
 > - Build/link: `whisper-bridge.h` (C interop). `build.sh` links the clone's
 >   whisper dylibs by rpath (dev, clone-tethered); `build.sh --static` links the
 >   static `build-install` archives → self-contained binary. `install.sh` builds
@@ -337,10 +341,9 @@ prebuilt). The §2 thin-app/shared-store model is up for reconsideration.
 > - Gauge: turn pink while processing, vanish once text lands.
 > - Axis-as-status colour (yellow idle / grey silence / green speech); maybe split
 >   the spectrogram into mirrored halves around the axis.
-> - Graceful-fallback SIGNAL: a missing Silero model falls back to energy SILENTLY
->   (only a log line) — surface it to the user.
-> - Optional: cull-on-stop using the segments (send the kebab, not the raw WAV) for
->   the text-repair + window-budget wins.
+> - Missing-Silero SIGNAL: today a missing model greys the spectrogram + skips
+>   culling (logged) but there's no explicit user-facing notice — surface it.
+> - Settings-pane checkbox mirroring `prune_dead_audio` (config key works now).
 
 **[ORIGINAL PLAN — DEFERRED] Eager background transcription (latency + >30s correctness)**
 
@@ -551,6 +554,15 @@ causal/no-fill-in-middle, not instruction-tuned).
 
 ## 5. Smaller debts
 
+- **BUG (unresolved, not reproducible): dictation box vanishes on a single-tap
+  while recording an additional chunk, mid-speech** (spectrogram was live with
+  green boxes, so state really was `.recording`). The only shift-triggered hide
+  is `confirmAndPaste`, which requires `.editing` — so this shouldn't be possible
+  from `.recording`; a state/timing race is suspected (see the gesture
+  disambiguator's `pendingTapTimer` + main-thread lag). Gesture+state logging is
+  in `AppState` (INFO); keep `log_level: debug` to also capture `KeyMonitor`'s
+  tap decisions, then `grep -E '\[KeyMonitor\]|\[AppState\]' log.txt`. Do NOT fix
+  before a captured trace. Full notes in memory `bug-box-vanishes-on-tap`.
 - **Cancellable Transcriber.** ESC during "Processing…" can't abort the in-flight
   request (hand-rolled semaphore + `Thread.sleep` retries); should become a
   cancellable async task.
