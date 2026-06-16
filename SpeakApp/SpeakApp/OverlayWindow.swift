@@ -124,6 +124,7 @@ class OverlayWindow {
             self?.fuelGauge.speechSeconds = seconds
             self?.fuelGauge.active = active
         }
+        fuelGauge.isHidden = true // shown only during recording/processing
     }
 
     /// Float above other apps (default) so the box appears over whatever you're
@@ -147,6 +148,7 @@ class OverlayWindow {
         textView.string = ""
         spectrogram.mode = .idle
         spectrogram.clear()
+        fuelGauge.isHidden = true
     }
 
     // MARK: - Recording lifecycle
@@ -158,6 +160,8 @@ class OverlayWindow {
         removeMarkerIfAny()
         insertMarker(glyph: Self.recordingGlyph)
         spectrogram.mode = .live
+        fuelGauge.phase = .recording
+        fuelGauge.isHidden = false
     }
 
     /// Recording ended, transcription in flight: 🎙️ → 🧠; the strip keeps
@@ -165,6 +169,7 @@ class OverlayWindow {
     func markProcessing() {
         replaceMarker(glyph: Self.processingGlyph)
         spectrogram.mode = .idle
+        fuelGauge.phase = .processing // pink
     }
 
     /// Transcription finished. Marker becomes the text (or vanishes when
@@ -172,6 +177,7 @@ class OverlayWindow {
     /// adjusted to fit the surrounding text.
     func finish(with text: String?) {
         spectrogram.mode = .idle
+        fuelGauge.isHidden = true // processing done — gauge disappears
         guard let range = markerRange(), let storage = textView.textStorage else {
             if let text = text { insertTextAtCursor(text) }
             return

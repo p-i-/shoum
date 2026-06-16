@@ -24,6 +24,13 @@ final class FuelGaugeView: NSView {
         didSet { if active != oldValue { needsDisplay = true } }
     }
 
+    /// Recording: green/white per `active`. Processing: the whole fill turns pink
+    /// (transcription in flight). On completion the owner hides the view entirely.
+    enum Phase { case recording, processing }
+    var phase: Phase = .recording {
+        didSet { if phase != oldValue { needsDisplay = true } }
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         let w = bounds.width, h = bounds.height
         guard w > 0, h > 0 else { return }
@@ -41,10 +48,17 @@ final class FuelGaugeView: NSView {
         let scale = w / CGFloat(span)
         let fillW = CGFloat(speechSeconds) * scale
 
-        // Fill: green while actively capturing, white when paused/idle.
-        (active
-            ? NSColor(calibratedRed: 0.15, green: 0.85, blue: 0.45, alpha: 0.95)
-            : NSColor(calibratedWhite: 0.95, alpha: 0.9)).setFill()
+        // Fill: pink while processing; otherwise green capturing / white paused.
+        let fillColor: NSColor
+        switch phase {
+        case .processing:
+            fillColor = NSColor(calibratedRed: 0.95, green: 0.35, blue: 0.62, alpha: 0.95)
+        case .recording:
+            fillColor = active
+                ? NSColor(calibratedRed: 0.15, green: 0.85, blue: 0.45, alpha: 0.95)
+                : NSColor(calibratedWhite: 0.95, alpha: 0.9)
+        }
+        fillColor.setFill()
         CGRect(x: 0, y: 0, width: fillW, height: h).fill()
 
         // One red bar per COMPLETED 30 s window (at 100%, 200%, …) — a visual
