@@ -1,6 +1,6 @@
 import AppKit
 
-enum SpeakState {
+enum ShoumState {
     case idle
     case recording
     case processing
@@ -8,7 +8,7 @@ enum SpeakState {
 }
 
 protocol AppStateDelegate: AnyObject {
-    func appStateDidChange(to state: SpeakState)
+    func appStateDidChange(to state: ShoumState)
     /// User gestured before the system is ready — surface the splash.
     func appStateNeedsAttention()
 }
@@ -16,7 +16,7 @@ protocol AppStateDelegate: AnyObject {
 class AppStateCoordinator: KeyMonitorDelegate {
     weak var delegate: AppStateDelegate?
 
-    private(set) var currentState: SpeakState = .idle {
+    private(set) var currentState: ShoumState = .idle {
         didSet {
             Log.info("[AppState] state \(oldValue) → \(currentState)")
             // Only in editing do tap (paste) and double-tap (new chunk) both

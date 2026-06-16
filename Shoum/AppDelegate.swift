@@ -16,7 +16,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessD
     private var everFailed = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        Log.info("[SpeakApp] Starting up...")
+        Log.info("[Shoum] Starting up...")
 
         // Capture any crash (NSException reason + backtrace) to the app log —
         // installed right after the log file is opened, before anything risky.
@@ -52,7 +52,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessD
             self?.updateAvailable = available
         }
 
-        Log.info("[SpeakApp] Startup checks running")
+        Log.info("[Shoum] Startup checks running")
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -65,7 +65,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessD
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.button?.image = NSImage(systemSymbolName: "hourglass.circle",
-                                           accessibilityDescription: "Speak (starting)")
+                                           accessibilityDescription: "Shoum (starting)")
         // A menu on the status item means every click — left OR right — opens it
         // (Docker-style). It's rebuilt on each open (menuNeedsUpdate) so the
         // status line reflects the current state.
@@ -96,7 +96,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessD
         }
 
         menu.addItem(.separator())
-        menu.addItem(menuItem("Quit Speak", "power", #selector(quit), key: "q"))
+        menu.addItem(menuItem("Quit Shoum", "power", #selector(quit), key: "q"))
     }
 
     private func menuItem(_ title: String, _ symbol: String, _ action: Selector, key: String = "") -> NSMenuItem {
@@ -143,7 +143,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessD
     /// nil color → plain template image (auto-adapts to the menu-bar appearance).
     private func setIcon(_ symbolName: String, color: NSColor? = nil) {
         guard let button = statusItem?.button,
-              let base = NSImage(systemSymbolName: symbolName, accessibilityDescription: "Speak") else { return }
+              let base = NSImage(systemSymbolName: symbolName, accessibilityDescription: "Shoum") else { return }
         if let color = color {
             let config = NSImage.SymbolConfiguration(hierarchicalColor: color)
             button.image = base.withSymbolConfiguration(config) ?? base
@@ -227,7 +227,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessD
 
     // MARK: - AppStateDelegate
 
-    func appStateDidChange(to state: SpeakState) {
+    func appStateDidChange(to state: ShoumState) {
         // Until ready, the icon belongs to the readiness flow
         guard appStateCoordinator.readiness.isReady else { return }
 
@@ -259,7 +259,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessD
         // readinessDidUpdate → autoPromptAccessibilityIfNeeded), so the two system
         // dialogs sequence cleanly.
         let trusted = AXIsProcessTrusted()
-        Log.info("[SpeakApp] Accessibility: \(trusted ? "GRANTED" : "NOT GRANTED")")
+        Log.info("[Shoum] Accessibility: \(trusted ? "GRANTED" : "NOT GRANTED")")
     }
 
     /// After the mic dialog has resolved and our window is in front, fire the
@@ -272,7 +272,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessD
         didAutoPromptAccessibility = true
         let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
         _ = AXIsProcessTrustedWithOptions(opts as CFDictionary)
-        Log.info("[SpeakApp] auto-prompted Accessibility (post-mic)")
+        Log.info("[Shoum] auto-prompted Accessibility (post-mic)")
     }
 
     /// Onboarding required a grant, so the user was bounced through System
@@ -291,7 +291,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessD
             if bid == Bundle.main.bundleIdentifier || bid == "com.apple.systempreferences" { return }
             self.disarmPostOnboardingForeground()
             self.splash.show()
-            Log.info("[SpeakApp] post-onboarding: re-foregrounded over \(bid ?? "?")")
+            Log.info("[Shoum] post-onboarding: re-foregrounded over \(bid ?? "?")")
         }
     }
 

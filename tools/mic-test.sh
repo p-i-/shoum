@@ -3,6 +3,6 @@
 # PASS = tap callbacks fire, all buffers convert and write, audio has signal.
 set -e
 DIR="$(cd "$(dirname "$0")" && pwd)"
-BIN="/tmp/speak-mic-test"
+BIN="/tmp/shoum-mic-test"
 swiftc -O -o "$BIN" "$DIR/mic-test.swift"
 exec "$BIN"

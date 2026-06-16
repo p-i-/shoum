@@ -55,7 +55,7 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
             backing: .buffered,
             defer: false
         )
-        panel.title = "Speak"
+        panel.title = "Shoum"
         panel.isReleasedWhenClosed = false
         panel.level = .normal // not .floating — must not force itself above other apps' windows
         panel.hidesOnDeactivate = false // NSPanel defaults to true → vanishes when app loses focus
@@ -282,7 +282,7 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
         } else {
             loginCheckbox.isEnabled = false
             loginCheckbox.state = .off
-            loginCheckbox.toolTip = "Available once Speak is installed to /Applications."
+            loginCheckbox.toolTip = "Available once Shoum is installed to /Applications."
         }
     }
 
@@ -295,7 +295,7 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
         stack.spacing = 8
         stack.translatesAutoresizingMaskIntoConstraints = false
 
-        let title = NSTextField(labelWithString: "Speak")
+        let title = NSTextField(labelWithString: "Shoum")
         title.font = .systemFont(ofSize: 22, weight: .bold)
         stack.addArrangedSubview(title)
 
@@ -305,7 +305,7 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
         stack.addArrangedSubview(tagline)
         stack.setCustomSpacing(14, after: tagline)
 
-        let commit = Bundle.main.object(forInfoDictionaryKey: "SpeakGitCommit") as? String ?? "unknown"
+        let commit = Bundle.main.object(forInfoDictionaryKey: "ShoumGitCommit") as? String ?? "unknown"
         let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
         let version = NSTextField(labelWithString: "Version \(short)   build \(commit)")
         version.font = .monospacedSystemFont(ofSize: 11.5, weight: .regular)

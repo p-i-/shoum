@@ -1,17 +1,21 @@
-# Speak configuration.
+# Shoum configuration.
 # Flat `key: value` pairs only. Restart the app to apply.
 # Delete a line to fall back to its built-in default.
 # Comments stay on their own lines so the in-app Settings editor can rewrite a
 # single value without clobbering them.
+#
+# This is the tracked TEMPLATE. Your live config.yaml is created from it on first
+# run (run.sh in dev; the app itself when installed) and is NOT git-tracked, so
+# local edits never show up as repo changes.
 
 # Which whisper model to load (whisper.cpp/models/ggml-<model>.bin).
 model: medium.en
 
 # Where the heavy model assets (the .bin and its ANE encoder) live.
-# Empty = the shared default, ~/Library/Application Support/Speak/models, which
+# Empty = the shared default, ~/Library/Application Support/Shoum/models, which
 # both the dev build and the installed app reuse so the ~2 GB is never
 # duplicated. Set an absolute path to relocate them (e.g. an external drive).
-model_dir: 
+model_dir:
 
 # CoreML/Neural Engine build (true) vs Metal only (false).
 use_ane: true
@@ -43,7 +47,7 @@ sounds: true
 # paste = switch to previous app and Cmd+V; copy = clipboard only.
 paste_mode: paste
 
-# Keep recorded WAVs in /tmp/speak/wavs for 24h so misfires can be inspected,
+# Keep recorded WAVs in /tmp/shoum/wavs for 24h so misfires can be inspected,
 # then auto-pruned. Set false to delete each clip right after transcription.
 keep_recordings: true
 
@@ -60,6 +64,6 @@ prune_dead_audio: true
 min_speech_dbfs: -60
 
 # Check GitHub on launch and show "Update available" in the menu if a newer build
-# exists. This is the only network call Speak makes (metadata only — one commit
+# exists. This is the only network call Shoum makes (metadata only — one commit
 # hash). Set false to disable it entirely.
 check_for_updates: true

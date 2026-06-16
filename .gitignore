@@ -8,3 +8,6 @@ whisper.cpp/
 
 # Python bytecode from tools/
 __pycache__/
+
+# Local config — created from config.yaml.template on first run; never tracked.
+/config.yaml

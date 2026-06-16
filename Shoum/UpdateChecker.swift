@@ -1,8 +1,8 @@
 import Foundation
 
-/// Notify-only update check — the single network call Speak makes: one GitHub
+/// Notify-only update check — the single network call Shoum makes: one GitHub
 /// API request for the latest commit on `main`, compared against the commit
-/// stamped into the bundle at build time (Info.plist → SpeakGitCommit, set by
+/// stamped into the bundle at build time (Info.plist → ShoumGitCommit, set by
 /// build.sh). Dev builds ("unknown" / "-dirty") and `check_for_updates: false`
 /// skip it entirely. We notify; we never auto-apply.
 final class UpdateChecker {
@@ -14,7 +14,7 @@ final class UpdateChecker {
 
     /// The commit this build was stamped with, or "unknown" if built outside git.
     var currentCommit: String {
-        Bundle.main.object(forInfoDictionaryKey: "SpeakGitCommit") as? String ?? "unknown"
+        Bundle.main.object(forInfoDictionaryKey: "ShoumGitCommit") as? String ?? "unknown"
     }
 
     var isDevBuild: Bool {

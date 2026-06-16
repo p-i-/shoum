@@ -1,4 +1,4 @@
-# Speak
+# Shoum
 
 Local, private speech-to-text for macOS, living in your menu bar. Powered by
 whisper.cpp (medium.en) with the encoder running on the Apple Neural Engine.
@@ -29,7 +29,7 @@ dictation daemon sporadically wedges with no reset short of a reboot.
 ping-pong between watching output and holding your next thought — it interrupts
 the train of thought you're trying to get down.
 
-**Speak fixes the shape of the interaction.** Everything you say lands first in a
+**Shoum fixes the shape of the interaction.** Everything you say lands first in a
 private floating box that *you* own: speak a whole thought (or several chunks),
 read it back, edit freely — nothing reaches the target app until you single-tap
 to paste. The result is pasted with ⌘V (works in most input surfaces, not "some
@@ -59,22 +59,22 @@ git clone <this repo> && cd speak
 
 - builds a **static** `whisper-server`, downloads the model, generates the ANE
   encoder (one-time python conversion);
-- builds `SpeakApp` and stages a **thin** `SpeakApp.app` into `/Applications`;
+- builds `Shoum` and stages a **thin** `Shoum.app` into `/Applications`;
 - **moves** the ~2 GB model assets into a shared store
-  (`~/Library/Application Support/Speak/models`) — one copy, reused by any future
+  (`~/Library/Application Support/Shoum/models`) — one copy, reused by any future
   dev build, never duplicated;
 - launches the app (triggers the first-run **Microphone** + **Accessibility**
   prompts; the Status window walks you through anything missing).
 
 The clone is then just a build workspace you can `rm -rf`. **There is no in-place
-upgrade in v1** — to reinstall, delete `/Applications/SpeakApp.app` first.
+upgrade in v1** — to reinstall, delete `/Applications/Shoum.app` first.
 
 ### Developing
 
 Skip the installer and iterate from the clone:
 
 ```bash
-./build.sh   # compile SpeakApp.app into ./build
+./build.sh   # compile Shoum.app into ./build
 ./run.sh     # foreground, logs stream to terminal + log.txt; Ctrl+C to quit
 ```
 
@@ -93,7 +93,7 @@ Edit via the **Settings tab** (click the menu-bar icon → Settings…) or edit
 file with a surgical per-line edit that preserves comments. **Restart to apply.**
 
 `config.yaml` location: the clone root in dev; `~/Library/Application
-Support/Speak/config.yaml` when installed (seeded from a bundled default on first
+Support/Shoum/config.yaml` when installed (seeded from a bundled default on first
 run). Flat `key: value` lines, comments on their own lines, missing keys fall
 back to defaults.
 
@@ -111,7 +111,7 @@ back to defaults.
 | `hotkey_keycode` | `56` | 56 = left shift, 60 = right shift |
 | `sounds` | `true` | Tink/Pop/Glass feedback |
 | `paste_mode` | `paste` | `paste` = ⌘V into previous app; `copy` = clipboard only |
-| `keep_recordings` | `true` | retain WAVs in `/tmp/speak/wavs` for 24h (debugging) |
+| `keep_recordings` | `true` | retain WAVs in `/tmp/shoum/wavs` for 24h (debugging) |
 | `min_speech_dbfs` | `-60` | clips never louder than this are treated as no-speech (skip whisper) |
 | `prune_dead_audio` | `true` | Silero VAD removes silence before transcribing (cleaner punctuation; more speech per 30s window). Falls back to sending raw audio if the VAD model is missing |
 | `check_for_updates` | `true` | check GitHub on launch; notify in the menu if a newer build exists |
@@ -125,11 +125,11 @@ only).
 
 | | dev | installed |
 |---|---|---|
-| app | `./build/SpeakApp.app` | `/Applications/SpeakApp.app` |
-| config / prompt | clone root | `~/Library/Application Support/Speak/` |
-| model + encoder | shared store (or clone `whisper.cpp/models`) | `~/Library/Application Support/Speak/models/` |
-| app log | clone `log.txt` | `~/Library/Logs/Speak/speak.log` |
-| server log | clone `server.log` | `~/Library/Application Support/Speak/server.log` |
+| app | `./build/Shoum.app` | `/Applications/Shoum.app` |
+| config / prompt | clone root | `~/Library/Application Support/Shoum/` |
+| model + encoder | shared store (or clone `whisper.cpp/models`) | `~/Library/Application Support/Shoum/models/` |
+| app log | clone `log.txt` | `~/Library/Logs/Shoum/shoum.log` |
+| server log | clone `server.log` | `~/Library/Application Support/Shoum/server.log` |
 
 ## Debugging
 

@@ -6,7 +6,7 @@ import Foundation
 ///   • **installed** — a self-contained `.app` in /Applications, with the
 ///     whisper-server binary, model, encoder and sample wav staged inside
 ///     `Contents/Resources`. User-editable files (config.yaml, prompt.txt) and
-///     logs (server.log) live in `~/Library/Application Support/Speak` because
+///     logs (server.log) live in `~/Library/Application Support/Shoum` because
 ///     the bundle's Resources are read-only (writing there breaks the
 ///     signature).
 ///   • **dev** — running from the git clone via run.sh. Both roots collapse to
@@ -33,7 +33,7 @@ struct Config {
     // Behavior
     var sounds = true
     var pasteMode = "paste" // "paste" = activate previous app + Cmd+V; "copy" = clipboard only
-    var keepRecordings = true // retain WAVs in /tmp/speak for 24h (debugging)
+    var keepRecordings = true // retain WAVs in /tmp/shoum for 24h (debugging)
     var minSpeechDBFS = -60.0 // clips quieter than this are no-speech; skip whisper
     var pruneDeadAudio = true // VAD-cull silence before sending to whisper (kebab)
     var checkForUpdates = true // query GitHub on launch to notify of a newer build
@@ -59,7 +59,7 @@ struct Config {
     }()
 
     /// The dev checkout root: walk up from the bundle to the dir containing
-    /// `whisper.cpp/`. Falls back to ~/code/speak. Only meaningful in dev mode.
+    /// `whisper.cpp/`. Falls back to ~/code/2026/Shoum. Only meaningful in dev mode.
     private static let cloneRoot: String = {
         var dir = Bundle.main.bundlePath as NSString
         for _ in 0..<8 {
@@ -68,7 +68,7 @@ struct Config {
                 return dir as String
             }
         }
-        return NSString(string: "~/code/speak").expandingTildeInPath
+        return NSString(string: "~/code/2026/Shoum").expandingTildeInPath
     }()
 
     /// Read-only assets (server binary, model, encoder, sample wav).
@@ -79,12 +79,12 @@ struct Config {
     }()
 
     /// Writable user data + logs (config.yaml, prompt.txt, server.log).
-    /// Installed → ~/Library/Application Support/Speak (created on demand);
+    /// Installed → ~/Library/Application Support/Shoum (created on demand);
     /// dev → the clone.
     static let dataRoot: String = {
         if isInstalled {
             let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            let dir = base.appendingPathComponent("Speak", isDirectory: true)
+            let dir = base.appendingPathComponent("Shoum", isDirectory: true)
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             return dir.path
         }
@@ -107,7 +107,7 @@ struct Config {
     /// the OS (and disk-cleanups) purge.
     static let canonicalModelStore: String = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        return base.appendingPathComponent("Speak/models", isDirectory: true).path
+        return base.appendingPathComponent("Shoum/models", isDirectory: true).path
     }()
 
     /// Directory holding the model `.bin` and its sibling `-encoder.mlmodelc`
@@ -184,13 +184,13 @@ struct Config {
 
     static var serverLogPath: String { dataPath("server.log") }
 
-    /// The app's own log file. Installed → ~/Library/Logs/Speak/speak.log
+    /// The app's own log file. Installed → ~/Library/Logs/Shoum/shoum.log
     /// (conventional macOS log location); dev → the clone's log.txt.
     static var appLogPath: String {
         if isInstalled {
-            let logs = (NSHomeDirectory() as NSString).appendingPathComponent("Library/Logs/Speak")
+            let logs = (NSHomeDirectory() as NSString).appendingPathComponent("Library/Logs/Shoum")
             try? FileManager.default.createDirectory(atPath: logs, withIntermediateDirectories: true)
-            return (logs as NSString).appendingPathComponent("speak.log")
+            return (logs as NSString).appendingPathComponent("shoum.log")
         }
         return (dataRoot as NSString).appendingPathComponent("log.txt")
     }

@@ -1,5 +1,5 @@
 // Mic smoke test: records 3s from the default input through the same
-// tap -> convert-to-16kHz-mono -> WAV pipeline SpeakApp uses, printing
+// tap -> convert-to-16kHz-mono -> WAV pipeline Shoum uses, printing
 // per-stage diagnostics. Run via tools/mic-test.sh.
 import AVFoundation
 import Foundation
@@ -10,7 +10,7 @@ let nativeFormat = inputNode.outputFormat(forBus: 0)
 print("nativeFormat:", nativeFormat)
 
 let targetFormat = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16000, channels: 1, interleaved: true)!
-let fileURL = URL(fileURLWithPath: "/tmp/speak-mic-test.wav")
+let fileURL = URL(fileURLWithPath: "/tmp/shoum-mic-test.wav")
 try? FileManager.default.removeItem(at: fileURL)
 let audioFile = try! AVAudioFile(forWriting: fileURL, settings: targetFormat.settings, commonFormat: .pcmFormatInt16, interleaved: true)
 

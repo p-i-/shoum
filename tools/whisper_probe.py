@@ -25,7 +25,7 @@ import urllib.request
 
 def server_port():
     for path in ("config.yaml",
-                 os.path.expanduser("~/Library/Application Support/Speak/config.yaml")):
+                 os.path.expanduser("~/Library/Application Support/Shoum/config.yaml")):
         try:
             with open(path) as f:
                 for line in f:

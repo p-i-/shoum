@@ -16,7 +16,7 @@ cache or the resident server on :8178.
 Usage:
     python3 tools/vad_lab.py [options] [file.wav ...]
 
-    With no files, processes every *.wav in /tmp/speak/wavs.
+    With no files, processes every *.wav in /tmp/shoum/wavs.
 
     --gap MS           inter-block silence in the reconstituted kebab (default 500)
     --threshold N      VAD speech threshold 0..1 (default 0.5)
@@ -31,7 +31,7 @@ Usage:
 Examples:
     python3 tools/vad_lab.py                          # compression report, all clips
     python3 tools/vad_lab.py --reconstruct /tmp/kebab # + write kebab wavs to listen
-    python3 tools/vad_lab.py --transcribe /tmp/speak/wavs/recording_1781548291.wav
+    python3 tools/vad_lab.py --transcribe /tmp/shoum/wavs/recording_1781548291.wav
 """
 import os
 import sys
@@ -48,8 +48,8 @@ VAD_BIN = os.path.join(WHISPER, "build/bin/whisper-vad-speech-segments")
 CLI_BIN = os.path.join(WHISPER, "build/bin/whisper-cli")
 VAD_MODEL = os.path.join(WHISPER, "models/for-tests-silero-v6.2.0-ggml.bin")
 DEFAULT_MODEL = os.path.expanduser(
-    "~/Library/Application Support/Speak/models/ggml-medium.en.bin")
-WAVS_DIR = "/tmp/speak/wavs"
+    "~/Library/Application Support/Shoum/models/ggml-medium.en.bin")
+WAVS_DIR = "/tmp/shoum/wavs"
 SR = 16000  # our recordings are always 16kHz mono 16-bit
 
 

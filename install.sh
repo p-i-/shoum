@@ -1,8 +1,8 @@
 #!/bin/bash
-# Speak — one-shot installer. Builds everything from source in this (disposable)
-# clone and installs a THIN SpeakApp.app into /Applications (~4 MB: the static
+# Shoum — one-shot installer. Builds everything from source in this (disposable)
+# clone and installs a THIN Shoum.app into /Applications (~4 MB: the static
 # whisper-server binary + a tiny sample + config seeds). The heavy ~2 GB model
-# assets are MOVED to a shared store (~/Library/Application Support/Speak/models)
+# assets are MOVED to a shared store (~/Library/Application Support/Shoum/models)
 # that both the installed app and any dev build reuse — never duplicated. So you
 # can delete this checkout afterward.
 #
@@ -20,14 +20,14 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 MODEL="medium.en"
-APP_NAME="SpeakApp"
-BUNDLE_ID="com.local.SpeakApp"
+APP_NAME="Shoum"
+BUNDLE_ID="org.pipad.shoum"
 DEST_APP="/Applications/$APP_NAME.app"
 BUILD_APP="$SCRIPT_DIR/build/$APP_NAME.app"
 WHISPER_DIR="$SCRIPT_DIR/whisper.cpp"
 INSTALL_BUILD="build-install"   # static build dir, kept separate from dev's build-coreml
 VENV="$SCRIPT_DIR/.venv-coreml"
-STORE="$HOME/Library/Application Support/Speak/models"   # shared model store
+STORE="$HOME/Library/Application Support/Shoum/models"   # shared model store
 
 DEV=false
 for arg in "$@"; do [ "$arg" = "--dev" ] && DEV=true; done
@@ -38,14 +38,14 @@ die()  { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 # ---------------------------------------------------------------------------
 say "Preflight"
 # ---------------------------------------------------------------------------
-[ "$(uname -m)" = "arm64" ] || die "Speak requires Apple Silicon (arm64). This Mac reports '$(uname -m)'."
+[ "$(uname -m)" = "arm64" ] || die "Shoum requires Apple Silicon (arm64). This Mac reports '$(uname -m)'."
 
 # A running instance (dev or installed) fights this build over the left-shift
 # event tap and the whisper-server port, and can't be cleanly replaced while in
 # use. Detect it FIRST — before any build work — and bail clearly.
 if pgrep -x "$APP_NAME" >/dev/null 2>&1; then
     printf '\n⚠️  %s is already running.\n' "$APP_NAME"
-    printf '   Quit it first (menu-bar icon → Quit Speak, or  pkill -x %s), then re-run.\n\n' "$APP_NAME"
+    printf '   Quit it first (menu-bar icon → Quit Shoum, or  pkill -x %s), then re-run.\n\n' "$APP_NAME"
     exit 1
 fi
 
@@ -174,22 +174,22 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-say "Build SpeakApp"
+say "Build Shoum"
 # ---------------------------------------------------------------------------
 cd "$SCRIPT_DIR"
 # --static: link the VAD against the static archives built above, so the app
 # binary is self-contained (no dylib rpaths into this clone).
 ./build.sh --static
-[ -d "$BUILD_APP" ] || die "SpeakApp build did not produce $BUILD_APP"
+[ -d "$BUILD_APP" ] || die "Shoum build did not produce $BUILD_APP"
 
 # The app statically links whisper for VAD → its binary must be self-contained
 # too (only system frameworks). Guard like we do for whisper-server.
 APP_BIN="$BUILD_APP/Contents/MacOS/$APP_NAME"
 if otool -L "$APP_BIN" | tail -n +2 | grep -qE '@rpath|@loader_path|'"$SCRIPT_DIR"; then
     otool -L "$APP_BIN"
-    die "SpeakApp binary has non-system dynamic deps — would break once the clone is removed."
+    die "Shoum binary has non-system dynamic deps — would break once the clone is removed."
 fi
-echo "SpeakApp binary is self-contained (system frameworks only)."
+echo "Shoum binary is self-contained (system frameworks only)."
 
 # ---------------------------------------------------------------------------
 say "Stage self-contained app into /Applications"
@@ -203,9 +203,11 @@ mkdir -p "$RES/samples"
 
 cp "$SERVER_BIN"                                  "$RES/whisper-server"
 cp "$WHISPER_DIR/samples/jfk.wav"                 "$RES/samples/"
-# Seeds for the user-editable files (copied to ~/Library/Application Support/Speak
-# on first run). Ship the current repo files as defaults.
-cp "$SCRIPT_DIR/config.yaml"                      "$RES/config.default.yaml"
+# Seeds for the user-editable files (copied to ~/Library/Application Support/Shoum
+# on first run). config.yaml is git-ignored/local, so ship the tracked TEMPLATE
+# as the default — that's what guarantees a fresh install never inherits a
+# developer's local overrides (e.g. log_level: debug).
+cp "$SCRIPT_DIR/config.yaml.template"             "$RES/config.default.yaml"
 cp "$SCRIPT_DIR/prompt.txt"                       "$RES/prompt.default.txt"
 
 # Shared model store (Application Support — NOT Caches, which get purged). MOVE
@@ -242,7 +244,7 @@ echo "Model assets in shared store: $STORE"
 # run on Apple Silicon), then the whole bundle (staging invalidated build.sh's
 # seal). Ad-hoc — locally built, no quarantine, Gatekeeper is satisfied.
 codesign --force --sign - "$RES/whisper-server"
-codesign --force --sign - --entitlements "$SCRIPT_DIR/SpeakApp/SpeakApp/SpeakApp.entitlements" "$DEST_APP"
+codesign --force --sign - --entitlements "$SCRIPT_DIR/Shoum/Shoum.entitlements" "$DEST_APP"
 codesign --verify --strict "$DEST_APP" || die "final signature failed to verify"
 
 # Final guard: confirm the STAGED binary is still self-contained.
@@ -265,7 +267,7 @@ echo "Launched. Grant Microphone + Accessibility when prompted; the startup wind
 say "Done"
 # ---------------------------------------------------------------------------
 cat <<EOF
-SpeakApp is installed at $DEST_APP (thin app, ~$APP_SIZE).
+Shoum is installed at $DEST_APP (thin app, ~$APP_SIZE).
 The ~2 GB model assets live ONCE in the shared store and are reused by both the
 installed app and any dev build — no duplication:
     $STORE
@@ -278,5 +280,5 @@ Conversion scratch you can reclaim (~2.3 GB) whether or not you keep the clone:
     rm -rf ~/.cache/whisper        # the openai checkpoint the converter downloaded
 
 Config + logs live (installed mode) under:
-    ~/Library/Application Support/Speak/   (config.yaml, prompt.txt, server.log)
+    ~/Library/Application Support/Shoum/   (config.yaml, prompt.txt, server.log)
 EOF

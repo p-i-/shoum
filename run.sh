@@ -2,17 +2,17 @@
 # Dev runner. Foreground only: logs stream to the terminal AND to log.txt (the
 # app owns that file directly — no tee). Ctrl+C to quit.
 #
-# Single-instance policy — only one Speak alive at a time, or a second instance
+# Single-instance policy — only one Shoum alive at a time, or a second instance
 # fights the first over the left-shift event tap and the whisper-server port:
 #   dev already running  -> refuse (you quit it)
 #   installed running    -> stop it now, relaunch when this session ends
 #   nothing running      -> nothing special
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-APP_PATH="$SCRIPT_DIR/build/SpeakApp.app"
-BINARY="$APP_PATH/Contents/MacOS/SpeakApp"
-INSTALLED_APP="/Applications/SpeakApp.app"
-INSTALLED_BIN="$INSTALLED_APP/Contents/MacOS/SpeakApp"
+APP_PATH="$SCRIPT_DIR/build/Shoum.app"
+BINARY="$APP_PATH/Contents/MacOS/Shoum"
+INSTALLED_APP="/Applications/Shoum.app"
+INSTALLED_BIN="$INSTALLED_APP/Contents/MacOS/Shoum"
 
 if [ ! -d "$APP_PATH" ]; then
     echo "App not found. Running build.sh first..."
@@ -22,6 +22,13 @@ fi
 if [ ! -x "$BINARY" ]; then
     echo "ERROR: Binary not found or not executable: $BINARY"
     exit 1
+fi
+
+# config.yaml is git-ignored (local to this machine). Create it once from the
+# tracked template so a fresh clone's dev build has an editable config.
+if [ ! -f "$SCRIPT_DIR/config.yaml" ]; then
+    cp "$SCRIPT_DIR/config.yaml.template" "$SCRIPT_DIR/config.yaml"
+    echo "Created config.yaml from config.yaml.template"
 fi
 
 SERVER_PORT=$(grep -E "^server_port:" "$SCRIPT_DIR/config.yaml" 2>/dev/null | sed 's/[^0-9]//g')
@@ -42,7 +49,7 @@ if pgrep -f "$INSTALLED_BIN" >/dev/null 2>&1; then
     RELAUNCH_INSTALLED=true
 fi
 
-echo "Starting SpeakApp..."
+echo "Starting Shoum..."
 echo "(Press Ctrl+C to quit)"
 echo ""
 
@@ -65,9 +72,9 @@ EXIT_CODE=$?
 
 if [ $EXIT_CODE -ne 0 ]; then
     echo ""
-    echo "ERROR: SpeakApp exited with code $EXIT_CODE"
+    echo "ERROR: Shoum exited with code $EXIT_CODE"
 
-    CRASH_LOG=$(ls -t ~/Library/Logs/DiagnosticReports/SpeakApp* 2>/dev/null | head -1)
+    CRASH_LOG=$(ls -t ~/Library/Logs/DiagnosticReports/Shoum* 2>/dev/null | head -1)
     if [ -n "$CRASH_LOG" ]; then
         echo "Crash log found: $CRASH_LOG"
         echo ""

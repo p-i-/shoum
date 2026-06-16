@@ -17,7 +17,7 @@ class AudioRecorder {
     /// Recordings are written here and kept for 24h (pruned at launch + on each
     /// stop) so a misfire — e.g. a silent clip whisper hallucinated into "Thank
     /// you" — can be inspected after the fact.
-    static let recordingsDir = "/tmp/speak/wavs"
+    static let recordingsDir = "/tmp/shoum/wavs"
     private let retention: TimeInterval = 24 * 3600
 
     /// Leading frames to zero out so the start cue bleeding into the mic (no

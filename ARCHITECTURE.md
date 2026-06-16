@@ -1,11 +1,11 @@
-# Speak — Architecture
+# Shoum — Architecture
 
 Component map, runtime layout, and the hard-won invariants. For the user-facing
 overview see [README.md](README.md); for the forward path see [TODO.md](TODO.md).
 
 ## Build
 
-No Xcode project. `build.sh` compiles `SpeakApp/SpeakApp/*.swift` with `swiftc`,
+No Xcode project. `build.sh` compiles `Shoum/Shoum/*.swift` with `swiftc`,
 assembles the `.app` bundle, writes Info.plist, and **ad-hoc signs** it
 (`codesign --sign -`). A locally-built binary has no quarantine attribute, so
 Gatekeeper is satisfied and ad-hoc signing is enough for TCC (mic/accessibility).
@@ -18,12 +18,12 @@ Adding a source file means dropping it in that directory — nothing to register
 ## Components
 
 ```
-SpeakApp (Swift, menu bar, LSUIElement)
+Shoum (Swift, menu bar, LSUIElement)
 ├── main.swift          NSApplication bootstrap
 ├── AppDelegate         status item (any click → menu: status line, Status/
 │                       Settings/About, Update, Quit), tray icon state + colour,
 │                       first-run permission onboarding (sequenced dialogs)
-├── UpdateChecker       notify-only: GitHub latest-commit vs stamped SpeakGitCommit
+├── UpdateChecker       notify-only: GitHub latest-commit vs stamped ShoumGitCommit
 ├── Config              config.yaml loader + path resolution + surgical writer
 ├── Log                 leveled logger → app log file + stderr
 ├── KeyMonitor          CGEventTap on flagsChanged+keyDown; double-tap state
@@ -66,11 +66,11 @@ roots:
 | | dev (run.sh) | installed (/Applications) |
 |---|---|---|
 | **resourceRoot** (binary, sample wav) | the clone | `…app/Contents/Resources` |
-| **dataRoot** (config.yaml, prompt.txt, server.log) | the clone | `~/Library/Application Support/Speak` |
+| **dataRoot** (config.yaml, prompt.txt, server.log) | the clone | `~/Library/Application Support/Shoum` |
 | **model store** (`.bin` + `-encoder.mlmodelc`) | shared store, else clone `whisper.cpp/models` | shared store |
-| **app log** | clone `log.txt` | `~/Library/Logs/Speak/speak.log` |
+| **app log** | clone `log.txt` | `~/Library/Logs/Shoum/shoum.log` |
 
-**Shared model store** = `~/Library/Application Support/Speak/models` (overridable
+**Shared model store** = `~/Library/Application Support/Shoum/models` (overridable
 via `model_dir`). The heavy ~2 GB assets live there **once** and are reused by
 both dev and installed runs — no duplication. `install.sh` *moves* them out of
 the clone into the store, so deleting the clone leaves exactly one copy. Chosen
@@ -89,7 +89,7 @@ Installed-mode user files are seeded once from bundled `config.default.yaml` /
 3. Build `whisper-server` **static** (`-DBUILD_SHARED_LIBS=OFF`) → one fat
    binary with no `@rpath` dylib deps. Asserts self-containment via `otool -L`.
 4. Generate the ANE encoder (one-time python conversion).
-5. Build SpeakApp, stage a **thin** bundle (binary + sample + config seeds, ~4 MB).
+5. Build Shoum, stage a **thin** bundle (binary + sample + config seeds, ~4 MB).
 6. `mv` the model assets into the shared store.
 7. Re-sign inside-out (nested binary first, then the bundle), verify, launch.
 

@@ -31,7 +31,7 @@ enum Log {
     /// Set from config.yaml at the end of Config.load(). Default until then.
     static var level: Level = .info
 
-    private static let queue = DispatchQueue(label: "speak.log")
+    private static let queue = DispatchQueue(label: "shoum.log")
     private static let stderrHandle = FileHandle.standardError
 
     /// Opened once, truncating, on first emit — one fresh log file per launch.

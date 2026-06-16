@@ -1,10 +1,10 @@
-# Speak — Roadmap & Handoff
+# Shoum — Roadmap & Handoff
 
 Forward path with the reasoning behind every decision, so a fresh session (or
 contributor) can pick up without re-deriving it. Read this top-to-bottom before
 starting.
 
-The **active arc is v1.0** (§2): turn Speak from a repo-tethered dev tool into a
+The **active arc is v1.0** (§2): turn Shoum from a repo-tethered dev tool into a
 real, installable, professional macOS app that other people can use. Everything
 below v1.0 is either already done (§1), deferred until justified (§4), a small
 debt (§5), or a do-not-regress invariant (§6).
@@ -45,7 +45,7 @@ Shipped and confirmed in daily use. Baseline the v1.0 work builds on:
   hallucination), and a client-side RMS energy gate (`min_speech_dbfs`, -60)
   skips whisper entirely when a clip never rises above the speech floor.
   `no_speech_prob` was measured useless (real speech 0.93 == silence 0.93);
-  energy separates by ~50 dB. Recordings now persist in `/tmp/speak/wavs` (24h,
+  energy separates by ~50 dB. Recordings now persist in `/tmp/shoum/wavs` (24h,
   pruned at launch + each stop) with `tools/whisper_probe.py` to inspect
   whisper's verbose_json.
 - **Trailing ellipsis strip.** Whisper's "..." on utterances it thinks trail off
@@ -70,7 +70,7 @@ the README is written for an agent (§2.G).
 > The fat-`.app` plan duplicated the ~2 GB model whenever the clone stuck around,
 > and since distribution is compile-from-source the bundle never needed to carry
 > the model. New model: a **thin** `.app` (binary + sample + config seeds, ~4 MB)
-> + a **single shared model store** at `~/Library/Application Support/Speak/models`
+> + a **single shared model store** at `~/Library/Application Support/Shoum/models`
 > (overridable via `model_dir`), reused by BOTH dev and installed runs. install.sh
 > `mv`s the assets into the store (one copy; clone stays deletable). Resolution:
 > `model_dir` → shared store → dev clone `whisper.cpp/models`. Everything else in
@@ -78,7 +78,7 @@ the README is written for an agent (§2.G).
 
 1. **Self-contained fat `.app` in `/Applications` (chosen distribution model).**
    Stage everything — `whisper-server` binary, ggml model, `mlmodelc` encoder —
-   into `SpeakApp.app/Contents/Resources`. Most Mac-like ("it's just an app"),
+   into `Shoum.app/Contents/Resources`. Most Mac-like ("it's just an app"),
    makes the app **clone-independent**, and makes `Config.speakRoot` *simpler*
    (resolve from `Bundle.main.resourceURL`, no walk-up). Honest cost: a ~2 GB
    `.app` (the model has to live somewhere). **This does NOT re-open the
@@ -96,9 +96,9 @@ the README is written for an agent (§2.G).
 3. **One user-facing script: `install.sh`.** `build.sh` (compile) and `run.sh`
    (fast dev iterate from the clone, foreground logs) stay for developers — but
    the *user* only ever runs `install.sh`. It: refuses if
-   `/Applications/SpeakApp.app` already exists (**no upgrade path in v1** —
+   `/Applications/Shoum.app` already exists (**no upgrade path in v1** —
    reinstall = delete-then-install; document this); does deps → build
-   whisper-server → ANE convert → build SpeakApp → stage self-contained into
+   whisper-server → ANE convert → build Shoum → stage self-contained into
    `/Applications` → `open` it (triggers first-run permission prompts) → print a
    **message** that the clone can now be `rm -rf`'d (never auto-delete — too
    dangerous for the user and devs).
@@ -106,7 +106,7 @@ the README is written for an agent (§2.G).
 4. **Logging.** A `Log.error/info/debug` shim + `log_level` config key (default
    `info`); gate the noisy sources (per-tap `KeyMonitor` timings, per-buffer
    `AudioRecorder` drops, the `Config` dump) to `debug`. The app **owns its log
-   file**: installed → `~/Library/Logs/Speak/`; dev → repo `log.txt`. `server.log`
+   file**: installed → `~/Library/Logs/Shoum/`; dev → repo `log.txt`. `server.log`
    relocates alongside. This is what makes detached/standalone running possible
    without losing logs (today logs depend on `run.sh`'s `tee`). Then add
    **`run.sh --detached`** (now viable; foreground stays the default).
@@ -185,7 +185,7 @@ the README is written for an agent (§2.G).
     **resourceRoot** (read-only assets: server binary, model `.bin`, encoder
     `mlmodelc`, `samples/jfk.wav`) → `Bundle.main.resourceURL` installed / clone
     dev; **dataRoot** (writable: `config.yaml`, `prompt.txt`, `server.log`) →
-    `~/Library/Application Support/Speak/` installed / clone dev. In dev mode
+    `~/Library/Application Support/Shoum/` installed / clone dev. In dev mode
     both collapse to the clone, preserving today's behavior exactly. The app
     seeds dataRoot from bundled defaults on first run (survives a deleted data
     dir). NOTE: the encoder-sibling-of-`.bin` invariant (#? / §4) is preserved —
@@ -258,7 +258,7 @@ notarized `.app` removes ALL of it for end users (download → drag to /Applicat
 - *End user:* download a notarized `.dmg`, drag to /Applications. Zero toolchain.
 
 **Updates: NOTIFY-ONLY** (no in-app rebuild/auto-update — decided). Implemented
-2026-06-15: build.sh stamps the git commit into Info.plist (`SpeakGitCommit`);
+2026-06-15: build.sh stamps the git commit into Info.plist (`ShoumGitCommit`);
 `UpdateChecker` queries GitHub's latest `main` commit on launch (`check_for_updates`,
 default on — the only network call); the menu shows "Update available → <sha>".
 Dev builds (`-dirty`/`unknown`) skip the check. The item opens the repo for now;
@@ -292,7 +292,7 @@ prebuilt). The §2 thin-app/shared-store model is up for reconsideration.
 > plan (preserved below, still valid if revisited) is DEFERRED in favour of a far
 > simpler v1. Full reasoning in memory `vad-chunking-findings`.
 >
-> **Measured (`tools/vad_lab.py`, `tools/chunk_sim.py`, real `/tmp/speak/wavs`):**
+> **Measured (`tools/vad_lab.py`, `tools/chunk_sim.py`, real `/tmp/shoum/wavs`):**
 > - ~55% of this user's audio is silence; VAD culling REPAIRS text (cleaner
 >   punctuation from clean pauses) and is content-preserving.
 > - The encoder is a FIXED ~700 ms pass per 30 s window (mel zero-padded to 3000;
@@ -608,9 +608,9 @@ causal/no-fill-in-middle, not instruction-tuned).
   guessing. Make failures log; don't blind-guess.
 - **Don't launch a test instance while the user's own `./run.sh` is running** —
   it hijacks the shared whisper-server on port 8178. Build-only is fine; ask the
-  user to test, or confirm no `SpeakApp` is running first.
+  user to test, or confirm no `Shoum` is running first.
 - **No Xcode, ever.** Plain `swiftc` via `build.sh`; adding a source file just
-  means dropping it in `SpeakApp/SpeakApp/`. This is deliberate.
+  means dropping it in `Shoum/Shoum/`. This is deliberate.
 - **Commit discipline:** the user tests before committing. Don't commit until
   they've confirmed. Solo local repo, linear `main`, no remote — history rewrites
   (soft-reset/redo) are safe when needed.

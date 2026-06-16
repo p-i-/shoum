@@ -1,12 +1,12 @@
 #!/bin/bash
-# Builds SpeakApp.app with swiftc directly — no Xcode required, only the
+# Builds Shoum.app with swiftc directly — no Xcode required, only the
 # Command Line Tools (swiftc, codesign, plutil).
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SRC_DIR="$SCRIPT_DIR/SpeakApp/SpeakApp"
+SRC_DIR="$SCRIPT_DIR/Shoum"
 BUILD_DIR="$SCRIPT_DIR/build"
-APP="$BUILD_DIR/SpeakApp.app"
+APP="$BUILD_DIR/Shoum.app"
 
 # --static links the VAD against whisper.cpp's STATIC archives (build-install) so
 # the app binary is self-contained — used by install.sh. Default (dev) links the
@@ -21,7 +21,7 @@ done
 
 mkdir -p "$APP/Contents/MacOS"
 
-echo "Compiling SpeakApp$($STATIC && echo ' (static VAD)')..."
+echo "Compiling Shoum$($STATIC && echo ' (static VAD)')..."
 # Link whisper.cpp for the Silero VAD (whisper_vad_* via whisper-bridge.h).
 WHISPER="$SCRIPT_DIR/whisper.cpp"
 LINK=()
@@ -51,12 +51,12 @@ swiftc \
     -target arm64-apple-macos14.0 \
     -import-objc-header "$SRC_DIR/whisper-bridge.h" \
     -I "$WHISPER/include" -I "$WHISPER/ggml/include" \
-    -o "$APP/Contents/MacOS/SpeakApp" \
+    -o "$APP/Contents/MacOS/Shoum" \
     "$SRC_DIR"/*.swift \
     "${LINK[@]}"
 
 # Stamp the build with its git commit (short hash, +"-dirty" if the working tree
-# has uncommitted changes). The app reads this (Info.plist → SpeakGitCommit) for
+# has uncommitted changes). The app reads this (Info.plist → ShoumGitCommit) for
 # the About pane and the update check; "unknown"/"-dirty" marks a dev build that
 # skips the update check.
 GIT_COMMIT=$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -66,11 +66,11 @@ fi
 echo "Stamping build: $GIT_COMMIT"
 
 # Info.plist: substitute the variables Xcode used to expand
-sed -e 's/\$(EXECUTABLE_NAME)/SpeakApp/g' \
-    -e 's/\$(PRODUCT_NAME)/SpeakApp/g' \
-    -e 's/\$(PRODUCT_BUNDLE_IDENTIFIER)/com.local.SpeakApp/g' \
+sed -e 's/\$(EXECUTABLE_NAME)/Shoum/g' \
+    -e 's/\$(PRODUCT_NAME)/Shoum/g' \
+    -e 's/\$(PRODUCT_BUNDLE_IDENTIFIER)/org.pipad.shoum/g' \
     -e 's/\$(MACOSX_DEPLOYMENT_TARGET)/14.0/g' \
-    -e "s/\$(SPEAK_GIT_COMMIT)/$GIT_COMMIT/g" \
+    -e "s/\$(SHOUM_GIT_COMMIT)/$GIT_COMMIT/g" \
     "$SRC_DIR/Info.plist" > "$APP/Contents/Info.plist"
 plutil -lint -s "$APP/Contents/Info.plist"
 
@@ -78,7 +78,7 @@ printf 'APPL????' > "$APP/Contents/PkgInfo"
 
 # Ad-hoc signature; locally-built means no quarantine, so Gatekeeper is happy
 codesign --force --sign - \
-    --entitlements "$SRC_DIR/SpeakApp.entitlements" \
+    --entitlements "$SRC_DIR/Shoum.entitlements" \
     "$APP"
 
 echo "Build complete: $APP"
