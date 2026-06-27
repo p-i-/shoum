@@ -74,7 +74,7 @@ upgrade in v1** — to reinstall, delete `/Applications/Shoum.app` first.
 Skip the installer and iterate from the clone:
 
 ```bash
-./build.sh   # compile Shoum.app into ./build
+./build.sh --dev   # compile Shoum.app into ./build (run with no args for help)
 ./run.sh     # foreground, logs stream to terminal + log.txt; Ctrl+C to quit
 ```
 

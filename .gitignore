@@ -11,3 +11,11 @@ __pycache__/
 
 # Local config — created from config.yaml.template on first run; never tracked.
 /config.yaml
+
+# Icon-processing machinery — local tooling, NOT shipped. The artifacts it
+# produces (assets/AppIcon.icns + assets/menubar-glyph.png) are committed; the
+# generators, source art and the cropper UI stay local (cropper kept for reuse).
+/tools/icon-prep/
+/tools/icon-cropper/
+/tools/squircle.swift
+/tools/make-icns.sh

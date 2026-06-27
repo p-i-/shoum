@@ -2,6 +2,10 @@ import Cocoa
 
 class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
+    /// The constant menu-bar glyph (bundled template image). Loaded once; pulses
+    /// while loading, tinted red on failure, otherwise drawn as-is (auto-adapts
+    /// to the menu-bar appearance).
+    private var trayGlyph: NSImage?
     private var appStateCoordinator: AppStateCoordinator!
     private var splash: SplashWindow!
     private let updateChecker = UpdateChecker()
@@ -64,8 +68,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessD
 
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "hourglass.circle",
-                                           accessibilityDescription: "Shoum (starting)")
+        // Load the bundled menu-bar glyph (a template, so it tints to the bar).
+        // Sized to ~18pt tall; falls back to an SF Symbol if the asset is missing.
+        if let url = Bundle.main.url(forResource: "menubar-glyph", withExtension: "png"),
+           let img = NSImage(contentsOf: url), img.size.height > 0 {
+            let h: CGFloat = 18
+            img.size = NSSize(width: (h * img.size.width / img.size.height).rounded(), height: h)
+            img.isTemplate = true
+            trayGlyph = img
+            statusItem.button?.image = img
+        } else {
+            Log.error("[AppDelegate] menu-bar glyph asset missing — using SF Symbol fallback")
+            statusItem.button?.image = NSImage(systemSymbolName: "waveform.circle",
+                                               accessibilityDescription: "Shoum")
+        }
         // A menu on the status item means every click — left OR right — opens it
         // (Docker-style). It's rebuilt on each open (menuNeedsUpdate) so the
         // status line reflects the current state.
@@ -137,20 +153,31 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessD
         NSApp.terminate(nil)
     }
 
-    /// Set the tray symbol. A non-nil `color` is applied via SF Symbol
-    /// configuration (renders reliably in the menu bar); `contentTintColor` on a
-    /// TEMPLATE status image draws NOTHING — confirmed root cause, see TRAYBUG.md.
-    /// nil color → plain template image (auto-adapts to the menu-bar appearance).
-    private func setIcon(_ symbolName: String, color: NSColor? = nil) {
-        guard let button = statusItem?.button,
-              let base = NSImage(systemSymbolName: symbolName, accessibilityDescription: "Shoum") else { return }
-        if let color = color {
-            let config = NSImage.SymbolConfiguration(hierarchicalColor: color)
-            button.image = base.withSymbolConfiguration(config) ?? base
+    /// The tray glyph is constant. Drawn as a template normally (auto-adapts to
+    /// the bar); tinted red on failure. `contentTintColor` on a TEMPLATE status
+    /// image draws NOTHING — so the red state is a NON-template tinted copy
+    /// (confirmed root cause, see TRAYBUG.md).
+    private func setTray(red: Bool) {
+        guard let button = statusItem?.button, let glyph = trayGlyph else { return }
+        if red {
+            button.image = tinted(glyph, .systemRed)
         } else {
-            base.isTemplate = true
-            button.image = base
+            glyph.isTemplate = true
+            button.image = glyph
         }
+    }
+
+    /// A non-template copy of `image` filled with `color` over its opaque pixels.
+    private func tinted(_ image: NSImage, _ color: NSColor) -> NSImage {
+        let out = NSImage(size: image.size)
+        out.lockFocus()
+        let rect = NSRect(origin: .zero, size: image.size)
+        image.draw(in: rect, from: rect, operation: .sourceOver, fraction: 1.0)
+        color.set()
+        rect.fill(using: .sourceAtop)
+        out.unlockFocus()
+        out.isTemplate = false
+        return out
     }
 
     // MARK: - Tray pulse (startup)
@@ -203,12 +230,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessD
             everFailed = true
             splash.markFailed()
             stopPulse()
-            setIcon("xmark.circle", color: .systemRed)
+            setTray(red: true)
             // A failure should be seen even if the splash was closed
             if !splash.isVisible { splash.show() }
         } else if !readiness.isReady {
-            startPulse()
-            setIcon("hourglass.circle") // template, pulsing
+            setTray(red: false)
+            startPulse() // constant glyph, pulsing while loading
         }
     }
 
@@ -222,28 +249,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessD
             armPostOnboardingForeground()
         }
         stopPulse()
-        setIcon("waveform.circle", color: .systemGreen)
+        setTray(red: false) // constant glyph once ready
     }
 
     // MARK: - AppStateDelegate
 
     func appStateDidChange(to state: ShoumState) {
-        // Until ready, the icon belongs to the readiness flow
-        guard appStateCoordinator.readiness.isReady else { return }
-
-        let symbolName: String
-        switch state {
-        case .idle:
-            symbolName = "waveform.circle"
-        case .recording:
-            symbolName = "waveform.circle.fill"
-        case .processing:
-            symbolName = "ellipsis.circle"
-        case .editing:
-            symbolName = "pencil.circle"
-        }
-        // Stay green once ready; swap only the symbol.
-        setIcon(symbolName, color: .systemGreen)
+        // The tray glyph is constant — recording/processing/editing are conveyed
+        // by the overlay window and the status-line title, not the menu-bar icon.
     }
 
     func appStateNeedsAttention() {

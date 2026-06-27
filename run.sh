@@ -16,7 +16,7 @@ INSTALLED_BIN="$INSTALLED_APP/Contents/MacOS/Shoum"
 
 if [ ! -d "$APP_PATH" ]; then
     echo "App not found. Running build.sh first..."
-    "$SCRIPT_DIR/build.sh"
+    "$SCRIPT_DIR/build.sh" --dev
 fi
 
 if [ ! -x "$BINARY" ]; then

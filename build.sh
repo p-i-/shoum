@@ -8,15 +8,43 @@ SRC_DIR="$SCRIPT_DIR/Shoum"
 BUILD_DIR="$SCRIPT_DIR/build"
 APP="$BUILD_DIR/Shoum.app"
 
-# --static links the VAD against whisper.cpp's STATIC archives (build-install) so
-# the app binary is self-contained — used by install.sh. Default (dev) links the
-# clone's dylibs by rpath (fast iteration, but clone-tethered).
+usage() {
+    cat <<EOF
+Builds Shoum.app into ./build (swiftc + ad-hoc sign; Command Line Tools only).
+
+Usage: ./build.sh <--dev | --static> [--clean]
+
+Build mode (one required — bare invocation just prints this help):
+  --dev              link the clone's whisper dylibs by rpath (fast iteration)
+  --static           link the static archives (self-contained; used by install.sh)
+
+Options:
+  --clean            wipe ./build before building
+  -h, --help         show this help
+
+The app icon + menu-bar glyph are the committed assets/AppIcon.icns +
+assets/menubar-glyph.png (generated locally by tools/icon-prep — gitignored).
+
+Examples:
+  ./build.sh --dev
+  ./build.sh --static --clean
+EOF
+}
+
+# Bare invocation is self-documenting: print usage and quit (don't build).
+[ $# -eq 0 ] && { usage; exit 0; }
+
+# --dev / --static pick how the VAD links against whisper.cpp (dylibs vs static).
 STATIC=false
-for arg in "$@"; do
-    case "$arg" in
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        --dev)    STATIC=false ;;
         --clean)  echo "Cleaning build directory..."; rm -rf "$BUILD_DIR" ;;
         --static) STATIC=true ;;
+        *) echo "build.sh: unknown option '$1'" >&2; usage; exit 1 ;;
     esac
+    shift
 done
 
 mkdir -p "$APP/Contents/MacOS"
@@ -75,6 +103,17 @@ sed -e 's/\$(EXECUTABLE_NAME)/Shoum/g' \
 plutil -lint -s "$APP/Contents/Info.plist"
 
 printf 'APPL????' > "$APP/Contents/PkgInfo"
+
+# App icon + menu-bar glyph: copy the committed final assets into the bundle
+# (CFBundleIconFile=AppIcon in Info.plist; the glyph is loaded by AppDelegate).
+# Copied before signing so the bundle seal covers them; install.sh inherits both
+# via its cp -R of the bundle. Regenerate via tools/icon-prep (gitignored).
+mkdir -p "$APP/Contents/Resources"
+for asset in AppIcon.icns menubar-glyph.png; do
+    src="$SCRIPT_DIR/assets/$asset"
+    [ -f "$src" ] || { echo "ERROR: missing $src (regenerate with tools/icon-prep/make_appicon.py)"; exit 1; }
+    cp "$src" "$APP/Contents/Resources/$asset"
+done
 
 # Ad-hoc signature; locally-built means no quarantine, so Gatekeeper is happy
 codesign --force --sign - \

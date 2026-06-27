@@ -1,0 +1,7 @@
+# Track ONLY the final shipped icon assets. Everything else dropped here (source
+# art, eye-variant experiments, OS-specific image-tool exports) is local and
+# regenerable via tools/icon-prep — so other developers never see it.
+*
+!.gitignore
+!AppIcon.icns
+!menubar-glyph.png
