@@ -86,6 +86,20 @@ The first run from a fresh clone also needs whisper.cpp built + the model; the
 easiest path is to run `install.sh` once (it leaves the shared model store in
 place), after which dev builds resolve the model from there.
 
+To push a **Swift-only change into the already-installed app** (without the full
+delete-and-reinstall, which needlessly rebuilds whisper-server and the encoder):
+
+```bash
+./upgrade.sh   # static rebuild → swap binary into /Applications/Shoum.app → re-sign
+```
+
+It quits the running app, swaps in the new binary (keeping the bundle's
+whisper-server), re-signs, and resets the Accessibility grant — which **must** be
+re-granted after every upgrade because ad-hoc signing changes the code hash each
+build (the script prints the steps; the app arms the hotkey live once you grant).
+Use `upgrade.sh` only for app-code changes; an engine/model/server change still
+needs a full reinstall.
+
 ## Configuration
 
 Edit via the **Settings tab** (click the menu-bar icon → Settings…) or edit

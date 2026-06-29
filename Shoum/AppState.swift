@@ -259,20 +259,26 @@ class AppStateCoordinator: KeyMonitorDelegate {
             }
 
             self.transcriber.transcribe(wavFile: sendURL) { result in
-                self.cleanupRecording(wavURL)
-                if let culledURL = culledURL { self.cleanupRecording(culledURL) }
-
                 switch result {
                 case .success(let text):
-                    self.handleTranscriptionSuccess(text)
+                    // Retain the audio actually sent (sendURL) for possible
+                    // flagging — released when the next conversion supersedes it
+                    // (or kept 24h when keep_recordings is on). Drop the raw now,
+                    // but only when it's a distinct file from the one sent.
+                    if wavURL != sendURL { self.cleanupRecording(wavURL) }
+                    self.handleTranscriptionSuccess(
+                        text, sentAudio: sendURL, pruned: culledURL != nil, duration: duration)
                 case .failure(let error):
+                    self.cleanupRecording(wavURL)
+                    if let culledURL = culledURL { self.cleanupRecording(culledURL) }
                     self.handleTranscriptionError(error)
                 }
             }
         }
     }
 
-    private func handleTranscriptionSuccess(_ text: String) {
+    private func handleTranscriptionSuccess(
+        _ text: String, sentAudio: URL, pruned: Bool, duration: TimeInterval) {
         Log.info("[AppState] transcription OK: \(text.count) chars: \"\(String(text.prefix(80)))\"")
         playSound(.success)
 
@@ -281,7 +287,54 @@ class AppStateCoordinator: KeyMonitorDelegate {
         // clobbers what they had copied; confirmAndPaste borrows it then restores.
         overlayWindow.finish(with: text)
 
+        // Capture this conversion for the flag feature: the exact audio sent to
+        // the engine plus the smartJoin I/O `finish` just produced. Held until
+        // the next conversion supersedes it, so it's flaggable even after paste.
+        let splice = overlayWindow.lastSplice
+        setLastInteraction(LastInteraction(
+            kebabURL: sentAudio,
+            pruned: pruned,
+            durationSec: duration,
+            rmsDBFS: audioRecorder.lastRMSdBFS,
+            model: Config.shared.model,
+            prompt: FlagStore.currentPrompt(),
+            timestamp: Date(),
+            chunk: splice?.chunk ?? text,
+            boxBefore: splice?.boxBefore ?? "",
+            boxAfter: splice?.boxAfter ?? overlayWindow.getText(),
+            replaced: splice?.replaced ?? ""))
+
         currentState = .editing
+    }
+
+    // MARK: - Flagging
+
+    private var lastInteraction: LastInteraction?
+
+    /// Whether there's a conversion available to flag (drives the menu item).
+    var hasFlaggableInteraction: Bool { lastInteraction != nil }
+
+    private func setLastInteraction(_ interaction: LastInteraction) {
+        if let prev = lastInteraction { releaseRetainedAudio(prev) }
+        lastInteraction = interaction
+    }
+
+    /// The superseded interaction's sent audio was retained only for flagging;
+    /// once it's replaced, let keep_recordings decide its fate — the retained dir
+    /// prunes at 24h, so we only need to act when keep_recordings is off.
+    private func releaseRetainedAudio(_ interaction: LastInteraction) {
+        guard !Config.shared.keepRecordings else { return }
+        try? FileManager.default.removeItem(at: interaction.kebabURL)
+    }
+
+    /// Persist the last conversion as a flagged incident (menu action). Returns
+    /// false if there's nothing to flag or the record couldn't be written.
+    @discardableResult
+    func flagLastInteraction(note: String) -> Bool {
+        guard let interaction = lastInteraction else { return false }
+        let ok = FlagStore.write(interaction, note: note)
+        Log.info("[AppState] flag last interaction (note: \(note.isEmpty ? "—" : "\"\(note)\"")) -> \(ok ? "saved" : "FAILED")")
+        return ok
     }
 
     private func handleTranscriptionError(_ error: Error) {

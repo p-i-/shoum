@@ -19,6 +19,17 @@ class OverlayWindow {
     /// capitalization is inherited by the transcribed chunk.
     private var replacedSelectionText = ""
 
+    /// The smartJoin I/O from the most recent successful `finish` — captured for
+    /// the flag feature so a post-processing splice can be reproduced exactly.
+    /// Only set on the success path (text != nil); read right after `finish`.
+    struct SpliceRecord {
+        let boxBefore: String   // box text before the splice, marker included
+        let replaced: String    // selection the marker replaced
+        let chunk: String       // transcription going in
+        let boxAfter: String    // box text after the splice
+    }
+    private(set) var lastSplice: SpliceRecord?
+
     var isVisible: Bool {
         panel.isVisible
     }
@@ -205,10 +216,18 @@ class OverlayWindow {
         spectrogram.mode = .idle
         fuelGauge.isHidden = true // processing done — gauge disappears
         guard let range = markerRange(), let storage = textView.textStorage else {
-            if let text = text { insertTextAtCursor(text) }
+            if let text = text {
+                let before = textView.string
+                insertTextAtCursor(text)
+                lastSplice = SpliceRecord(
+                    boxBefore: before, replaced: "", chunk: text, boxAfter: textView.string)
+            }
             return
         }
 
+        // Box text before any mutation (the 🧠 marker still in place encodes the
+        // insertion point) — captured for the flag record's post-processing half.
+        let boxBeforeWithMarker = storage.string
         let full = storage.string as NSString
         let left = full.substring(to: range.location)
         let right = full.substring(from: range.location + range.length)
@@ -237,6 +256,10 @@ class OverlayWindow {
         let cursor = NSRange(location: range.location + (replacement as NSString).length, length: 0)
         textView.setSelectedRange(cursor)
         textView.scrollRangeToVisible(cursor)
+
+        lastSplice = SpliceRecord(
+            boxBefore: boxBeforeWithMarker, replaced: replacedSelectionText,
+            chunk: text, boxAfter: storage.string)
     }
 
     /// Whisper emits each chunk as a standalone sentence ("Putting it through

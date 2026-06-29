@@ -29,6 +29,10 @@ enum CheckState {
     case pending
     case running(String)
     case ok(String)
+    /// Not satisfied yet but not a failure — waiting on the user (e.g. a
+    /// permission grant). Renders yellow ⚠️, not red ❌; doesn't make the tray
+    /// red. Resolves to .ok once the user acts.
+    case warning(String)
     case failed(String)
 
     var emoji: String {
@@ -36,6 +40,7 @@ enum CheckState {
         case .pending: return "⚪️"
         case .running: return "🔄"
         case .ok:      return "✅"
+        case .warning: return "⚠️"
         case .failed:  return "❌"
         }
     }
@@ -43,11 +48,12 @@ enum CheckState {
     var detail: String {
         switch self {
         case .pending: return ""
-        case .running(let s), .ok(let s), .failed(let s): return s
+        case .running(let s), .ok(let s), .warning(let s), .failed(let s): return s
         }
     }
 
     var isOK: Bool { if case .ok = self { return true }; return false }
+    var isWarning: Bool { if case .warning = self { return true }; return false }
     var isFailed: Bool { if case .failed = self { return true }; return false }
 }
 
@@ -79,10 +85,14 @@ class ReadinessChecker {
     private let transcriber = Transcriber()
 
     var anyFailed: Bool { states.values.contains { $0.isFailed } }
+    /// A check is waiting on the user (e.g. Accessibility not yet granted) — a
+    /// ⚠️, not a failure. Drives the splash header + tray without going red.
+    var anyWarning: Bool { states.values.contains { $0.isWarning } }
 
-    /// True once every check has reached ✅ or ❌ — gates the splash controls.
+    /// True once every check has settled into a terminal display state
+    /// (✅ / ⚠️ / ❌) — gates the splash controls.
     var allResolved: Bool {
-        states.values.allSatisfy { $0.isOK || $0.isFailed }
+        states.values.allSatisfy { $0.isOK || $0.isFailed || $0.isWarning }
     }
 
     /// Accessibility was granted after launch and the event tap re-armed live;
@@ -98,12 +108,14 @@ class ReadinessChecker {
         // Gate "hotkey armed" on actual Accessibility trust so a missing grant
         // can't masquerade as ready (which painted the tray falsely green).
         let accessible = AXIsProcessTrusted()
+        // Not-yet-granted is a ⚠️ (waiting on the user), not a ❌ failure — the
+        // app polls and arms live once granted.
         set(.accessibility, accessible
             ? .ok("granted")
-            : .failed("grant in System Settings → Privacy → Accessibility"))
+            : .warning("grant in System Settings → Privacy → Accessibility"))
         set(.hotkey, (accessible && hotkeyOK)
             ? .ok("double-tap key \(Config.shared.hotkeyKeycode)")
-            : .failed("needs Accessibility permission"))
+            : .warning("needs Accessibility permission"))
         checkFiles()
         checkMic(recorder)
         startServerWatch()

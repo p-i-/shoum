@@ -403,8 +403,10 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
         guard let label = rowLabels[item] else { return }
         let detail = state.detail.isEmpty ? "" : " — \(state.detail)"
         label.stringValue = "\(state.emoji) \(item.title)\(detail)"
-        label.textColor = state.isFailed ? .systemRed : .labelColor
-        permissionButtons[item]?.isHidden = !state.isFailed
+        label.textColor = state.isFailed ? .systemRed : (state.isWarning ? .systemYellow : .labelColor)
+        // Show the "Open Settings…" action for actionable rows — failures AND
+        // warnings (e.g. a permission still to grant).
+        permissionButtons[item]?.isHidden = !(state.isFailed || state.isWarning)
     }
 
     func setControlsVisible(_ visible: Bool) {
@@ -420,6 +422,11 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
 
     func markFailed() {
         statusLine.stringValue = "Problems found — fix the ❌ items below"
+    }
+
+    /// No hard failures, but something needs the user (e.g. a permission grant).
+    func markWarning() {
+        statusLine.stringValue = "Action needed — grant the ⚠️ items below"
     }
 
     // MARK: - Actions

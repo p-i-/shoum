@@ -105,6 +105,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessD
         menu.addItem(menuItem("Settings…", "gearshape", #selector(openSettingsTab), key: ","))
         menu.addItem(menuItem("About…", "info.circle", #selector(openAboutTab)))
 
+        // Flag the last conversion for later review — only when there is one.
+        if appStateCoordinator?.hasFlaggableInteraction == true {
+            menu.addItem(.separator())
+            menu.addItem(menuItem("Flag last dictation…", "flag", #selector(flagLast)))
+        }
+
         if updateAvailable {
             menu.addItem(.separator())
             let label = updateChecker.latestRemote.map { "Update available → \($0)" } ?? "Update available"
@@ -125,6 +131,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessD
     private func statusLineTitle() -> String {
         let readiness = appStateCoordinator.readiness
         if readiness.anyFailed { return "Setup needed — open Status" }
+        if readiness.anyWarning { return "Permission needed — open Status" }
         if !readiness.isReady { return "Starting…" }
         switch appStateCoordinator.currentState {
         case .idle:       return "Ready — double-tap ⇧ to dictate"
@@ -142,6 +149,29 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessD
         let config = NSImage.SymbolConfiguration(hierarchicalColor: color)
         return NSImage(systemSymbolName: "circle.fill", accessibilityDescription: nil)?
             .withSymbolConfiguration(config)
+    }
+
+    /// Prompt for an optional "what it should have said" note, then persist the
+    /// last conversion (audio + box-before/after) as a flagged incident.
+    @objc private func flagLast() {
+        guard appStateCoordinator?.hasFlaggableInteraction == true else { return }
+
+        let alert = NSAlert()
+        alert.messageText = "Flag last dictation"
+        alert.informativeText = "Saves the audio sent to the engine plus the box before/after, for later review. Optionally note what it should have said."
+        alert.addButton(withTitle: "Flag")
+        alert.addButton(withTitle: "Cancel")
+
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        field.placeholderString = "What it should have said (optional)"
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let ok = appStateCoordinator?.flagLastInteraction(note: field.stringValue) ?? false
+        if ok, Config.shared.sounds { NSSound(named: "Glass")?.play() }
     }
 
     @objc private func openStatusTab()   { splash.show(tab: "status") }
@@ -232,6 +262,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessD
             stopPulse()
             setTray(red: true)
             // A failure should be seen even if the splash was closed
+            if !splash.isVisible { splash.show() }
+        } else if readiness.anyWarning {
+            // Something needs the user (e.g. Accessibility) — surface it, but as a
+            // ⚠️, not a red failure. everFailed keeps the post-grant window/
+            // re-foreground handling that onboarding relies on.
+            everFailed = true
+            splash.markWarning()
+            setTray(red: false)
+            startPulse()
             if !splash.isVisible { splash.show() }
         } else if !readiness.isReady {
             setTray(red: false)

@@ -115,8 +115,19 @@ for asset in AppIcon.icns menubar-glyph.png; do
     cp "$src" "$APP/Contents/Resources/$asset"
 done
 
-# Ad-hoc signature; locally-built means no quarantine, so Gatekeeper is happy
-codesign --force --sign - \
+# Code signature. Prefer the STABLE self-signed identity from
+# tools/make-signing-cert.sh — it keeps the app's designated requirement (and so
+# the macOS Accessibility/TCC grant) constant across rebuilds (ARCHITECTURE.md
+# invariant 11). Falls back to ad-hoc when that identity isn't installed.
+# Locally-built means no quarantine, so Gatekeeper is happy either way.
+SHOUM_KC="$HOME/Library/Keychains/shoum-signing.keychain-db"
+if [ -f "$SHOUM_KC" ]; then security unlock-keychain -p shoum "$SHOUM_KC" 2>/dev/null || true; fi
+SIGN_ID="-"
+if security find-identity -p codesigning 2>/dev/null | grep -q "Shoum Local Signing"; then
+    SIGN_ID="Shoum Local Signing"
+fi
+echo "Signing: $([ "$SIGN_ID" = "-" ] && echo 'ad-hoc (Accessibility re-grant needed each upgrade)' || echo "$SIGN_ID (stable — grant persists)")"
+codesign --force --sign "$SIGN_ID" \
     --entitlements "$SRC_DIR/Shoum.entitlements" \
     "$APP"
 

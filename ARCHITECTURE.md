@@ -14,6 +14,13 @@ Adding a source file means dropping it in that directory — nothing to register
 - `build.sh` — compile the app (dev).
 - `run.sh` — run from the clone, foreground logs; one instance at a time (stops/relaunches the installed app so they don't fight).
 - `install.sh` — the user-facing installer (see "Install layout" below).
+- `upgrade.sh` — **in-place upgrade of the installed app for Swift-only changes.**
+  Rebuilds `--static`, swaps just the binary + Info.plist into
+  `/Applications/Shoum.app` (keeping the bundle's `whisper-server` Resource —
+  see invariant 11), re-signs, and resets the stale Accessibility grant. Use this
+  to push app-code changes to a running installed app without the full
+  delete-and-`install.sh` (which needlessly rebuilds whisper-server + the encoder).
+  Only the Swift app changed → `upgrade.sh`; engine/model/server change → reinstall.
 
 ## Components
 
@@ -139,3 +146,23 @@ Installed-mode user files are seeded once from bundled `config.default.yaml` /
     activation through the System-Settings round-trip: `orderFrontRegardless`
     plus a one-shot post-onboarding re-foreground bring our window back (Stage
     Manager can still override — accept it; the green tray is the done-signal).
+11. **Ad-hoc signing rebinds the Accessibility (TCC) grant on every build.**
+    `codesign --sign -` mints a fresh code hash each compile, and macOS keys the
+    Accessibility grant to that hash. So after any binary swap (`upgrade.sh`, or a
+    manual `cp` into the installed bundle) the prior grant is STALE: the System
+    Settings checkbox still shows "on" but `AXIsProcessTrusted()` returns false
+    and toggling it does nothing (it re-applies the same stale binding). The fix
+    is `tccutil reset Accessibility org.pipad.shoum` then relaunch so the app
+    re-prompts clean — `upgrade.sh` does this automatically. Mic (a different TCC
+    class) survives. Don't waste time re-toggling the checkbox — reset.
+    **Permanent cure (implemented): `tools/make-signing-cert.sh`** installs a
+    stable self-signed code-signing identity ("Shoum Local Signing", in a
+    dedicated keychain) so the designated requirement is identity-based, not
+    hash-based, and the grant then persists across rebuilds. `build.sh` signs with
+    it when present (ad-hoc fallback otherwise) and `upgrade.sh` skips the reset.
+    Only the one-time ad-hoc→cert transition still costs a single re-grant.
+12. **Hot-swap upgrades must preserve `Contents/Resources/whisper-server`.** Its
+    presence is the *only* signal for `Config.isInstalled`. Copying the whole dev
+    `build/Shoum.app` over the installed one drops it and silently flips the app
+    to dev path resolution. `upgrade.sh` copies only the binary + Info.plist for
+    exactly this reason.
