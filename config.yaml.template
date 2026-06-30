@@ -47,6 +47,17 @@ sounds: true
 # paste = switch to previous app and Cmd+V; copy = clipboard only.
 paste_mode: paste
 
+# In terminals (iTerm, Terminal, Ghostty, kitty, Alacritty, WezTerm, Warp,
+# Hyper), deliver the result by typing it as keystrokes instead of a Cmd+V paste
+# — so editors like Claude Code don't collapse it to a "[Pasted N lines]"
+# placeholder (newlines are sent as Shift+Return so nothing submits early). Only
+# applies to those terminal apps; everything else still uses Cmd+V. Off by default.
+type_into_terminals: false
+
+# After pasting, put your previous clipboard contents back. Set false to leave
+# the dictated text on the clipboard instead (and skip the restore entirely).
+restore_clipboard: true
+
 # Keep recorded WAVs in /tmp/shoum/wavs for 24h so misfires can be inspected,
 # then auto-pruned. Set false to delete each clip right after transcription.
 keep_recordings: true

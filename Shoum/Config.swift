@@ -33,6 +33,8 @@ struct Config {
     // Behavior
     var sounds = true
     var pasteMode = "paste" // "paste" = activate previous app + Cmd+V; "copy" = clipboard only
+    var typeIntoTerminals = false // in terminals, keystroke-inject instead of ⌘V (avoids Claude Code's "[Pasted N lines]" collapse)
+    var restoreClipboard = true // put the user's clipboard back after a paste
     var keepRecordings = true // retain WAVs in /tmp/shoum for 24h (debugging)
     var minSpeechDBFS = -60.0 // clips quieter than this are no-speech; skip whisper
     var pruneDeadAudio = true // VAD-cull silence before sending to whisper (kebab)
@@ -303,6 +305,8 @@ struct Config {
             case "hotkey_keycode": config.hotkeyKeycode = Int(value) ?? config.hotkeyKeycode
             case "sounds": config.sounds = (value == "true")
             case "paste_mode": config.pasteMode = value
+            case "type_into_terminals": config.typeIntoTerminals = (value == "true")
+            case "restore_clipboard": config.restoreClipboard = (value == "true")
             case "keep_recordings": config.keepRecordings = (value == "true")
             case "min_speech_dbfs": config.minSpeechDBFS = Double(value) ?? config.minSpeechDBFS
             case "prune_dead_audio": config.pruneDeadAudio = (value == "true")

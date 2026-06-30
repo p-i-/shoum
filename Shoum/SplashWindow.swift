@@ -31,11 +31,12 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
     private let soundsCheckbox = NSButton(checkboxWithTitle: "Sound feedback", target: nil, action: nil)
     private let pruneCheckbox = NSButton(checkboxWithTitle: "Prune dead audio (VAD removes silence before transcribing)", target: nil, action: nil)
     private let pasteModePopup = NSPopUpButton()
+    private let typeIntoTerminalsCheckbox = NSButton(checkboxWithTitle: "Type directly into terminals (Claude-Code friendly)", target: nil, action: nil)
+    private let restoreClipboardCheckbox = NSButton(checkboxWithTitle: "Restore clipboard after pasting", target: nil, action: nil)
     private let loginCheckbox = NSButton(checkboxWithTitle: "Start at login", target: nil, action: nil)
     private let promptTextView = NSTextView()
     private let settingsStatus = NSTextField(labelWithString: "")
-    private let saveButton = NSButton(title: "Save", target: nil, action: nil)
-    /// Prompt text as last loaded/saved — baseline for dirty detection.
+    /// Prompt text as last loaded/applied — baseline for change detection.
     private var baselinePrompt = ""
 
     var isVisible: Bool { panel.isVisible }
@@ -190,6 +191,8 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
         portField.stringValue = String(cfg.serverPort)
         soundsCheckbox.state = cfg.sounds ? .on : .off
         pruneCheckbox.state = cfg.pruneDeadAudio ? .on : .off
+        typeIntoTerminalsCheckbox.state = cfg.typeIntoTerminals ? .on : .off
+        restoreClipboardCheckbox.state = cfg.restoreClipboard ? .on : .off
         doubleTapField.stringValue = String(cfg.doubleTapWindowMs)
         tapMaxField.stringValue = String(cfg.tapMaxMs)
         holdReleaseField.stringValue = String(cfg.holdReleaseMs)
@@ -209,13 +212,14 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
         for f in [modelField, modelDirField, portField, doubleTapField, tapMaxField, holdReleaseField] {
             f.translatesAutoresizingMaskIntoConstraints = false
             f.widthAnchor.constraint(equalToConstant: 240).isActive = true
-            f.delegate = self // live edits → dirty check
+            f.delegate = self // commit (Enter/blur) → applySettings
         }
         // Dirty-tracking on the non-text controls (login is applied instantly, not saved).
         for popup in [logLevelPopup, pasteModePopup, hotkeyPopup] {
             popup.target = self; popup.action = #selector(settingChanged)
         }
-        for box in [useANECheckbox, soundsCheckbox, pruneCheckbox] {
+        for box in [useANECheckbox, soundsCheckbox, pruneCheckbox,
+                    typeIntoTerminalsCheckbox, restoreClipboardCheckbox] {
             box.target = self; box.action = #selector(settingChanged)
         }
 
@@ -229,6 +233,8 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
         stack.addArrangedSubview(formRow("Hold-release (ms)", holdReleaseField))
         stack.addArrangedSubview(formRow("Hotkey", hotkeyPopup))
         stack.addArrangedSubview(formRow("Paste mode", pasteModePopup))
+        stack.addArrangedSubview(typeIntoTerminalsCheckbox)
+        stack.addArrangedSubview(restoreClipboardCheckbox)
         stack.addArrangedSubview(soundsCheckbox)
         stack.addArrangedSubview(pruneCheckbox)
 
@@ -250,7 +256,7 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
         promptTextView.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
         promptTextView.isRichText = false
         promptTextView.autoresizingMask = [.width]
-        promptTextView.delegate = self // live edits → dirty check
+        promptTextView.delegate = self // commit (Enter/blur) → applySettings
         scroll.documentView = promptTextView
         stack.addArrangedSubview(scroll)
         NSLayoutConstraint.activate([
@@ -259,17 +265,15 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
             scroll.trailingAnchor.constraint(equalTo: stack.trailingAnchor),
         ])
 
+        // No Save button — settings apply instantly (toggles on change, text
+        // fields/prompt on commit). A quiet hint says so.
         settingsStatus.font = .systemFont(ofSize: 11)
-        settingsStatus.textColor = .secondaryLabelColor
-        saveButton.target = self
-        saveButton.action = #selector(saveSettings)
-        saveButton.keyEquivalent = "s"
-        saveButton.keyEquivalentModifierMask = [.command]
-        saveButton.isHidden = true // appears only once a setting actually changes
-        let saveRow = NSStackView(views: [settingsStatus, NSView(), saveButton])
-        saveRow.orientation = .horizontal
+        settingsStatus.textColor = .tertiaryLabelColor
+        settingsStatus.stringValue = "Settings apply as you change them."
+        let hintRow = NSStackView(views: [settingsStatus, NSView()])
+        hintRow.orientation = .horizontal
 
-        return wrapInTab(stack, bottom: saveRow)
+        return wrapInTab(stack, bottom: hintRow)
     }
 
     private func configureLoginCheckbox() {
@@ -489,17 +493,27 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
             "sounds": soundsCheckbox.state == .on ? "true" : "false",
             "prune_dead_audio": pruneCheckbox.state == .on ? "true" : "false",
             "paste_mode": pasteModePopup.titleOfSelectedItem ?? "paste",
+            "type_into_terminals": typeIntoTerminalsCheckbox.state == .on ? "true" : "false",
+            "restore_clipboard": restoreClipboardCheckbox.state == .on ? "true" : "false",
         ]
     }
 
-    @objc private func saveSettings() {
+    // MARK: - Instant apply (no Save button)
+
+    /// Write the current control values + prompt to disk and apply them live.
+    /// Toggles/popups call this on change; text fields and the prompt call it on
+    /// commit (Enter / focus-loss). A no-op when nothing actually changed, so
+    /// repeated calls — and the whisper-server restart an engine setting triggers
+    /// — only happen on a real change.
+    private func applySettings() {
         let old = Config.shared // pre-reload, to decide what needs an engine restart
-        let oldPrompt = baselinePrompt
         let newPrompt = promptTextView.string
+        let promptChanged = newPrompt != baselinePrompt
         let values = configValues()
+        guard Config.wouldChange(values) || promptChanged else { return }
 
         Config.write(values)
-        if newPrompt != oldPrompt {
+        if promptChanged {
             do { try newPrompt.write(toFile: Config.promptFilePath, atomically: true, encoding: .utf8) }
             catch { Log.error("[Settings] failed to write prompt.txt: \(error)") }
         }
@@ -509,25 +523,17 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
             || values["model_dir"] != old.modelDir
             || (values["use_ane"] == "true") != old.useANE
             || values["server_port"] != String(old.serverPort)
-            || newPrompt != oldPrompt
+            || promptChanged
 
         onApply?(engineChanged) // reloads Config.shared (light settings live now)
         baselinePrompt = newPrompt
-        updateSaveVisibility() // controls now match saved config → hides again
         Log.info("[Settings] applied (engineChanged=\(engineChanged))")
-        panel.orderOut(nil) // close the window on save
     }
 
-    // MARK: - Dirty tracking (Save shows only when something changed)
-
-    /// Clean one-liner: would saving change the file (config.yaml or prompt.txt)?
-    private func isDirty() -> Bool {
-        Config.wouldChange(configValues()) || promptTextView.string != baselinePrompt
-    }
-
-    private func updateSaveVisibility() { saveButton.isHidden = !isDirty() }
-
-    @objc private func settingChanged() { updateSaveVisibility() }
-    func controlTextDidChange(_ obj: Notification) { updateSaveVisibility() }
-    func textDidChange(_ notification: Notification) { updateSaveVisibility() }
+    // Toggles/popups apply immediately; text fields and the prompt apply on
+    // commit (Enter / focus-loss), never per keystroke — so we don't act on a
+    // half-typed value or restart the server mid-edit.
+    @objc private func settingChanged() { applySettings() }
+    func controlTextDidEndEditing(_ obj: Notification) { applySettings() }
+    func textDidEndEditing(_ notification: Notification) { applySettings() }
 }

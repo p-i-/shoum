@@ -125,6 +125,8 @@ back to defaults.
 | `hotkey_keycode` | `56` | 56 = left shift, 60 = right shift |
 | `sounds` | `true` | Tink/Pop/Glass feedback |
 | `paste_mode` | `paste` | `paste` = ⌘V into previous app; `copy` = clipboard only |
+| `type_into_terminals` | `false` | in terminals, type the result as keystrokes (newlines as Shift+Return) instead of ⌘V, so Claude Code doesn't collapse it to "[Pasted N lines]"; other apps still use ⌘V |
+| `restore_clipboard` | `true` | put your previous clipboard back after pasting; `false` leaves the dictation on the clipboard |
 | `keep_recordings` | `true` | retain WAVs in `/tmp/shoum/wavs` for 24h (debugging) |
 | `min_speech_dbfs` | `-60` | clips never louder than this are treated as no-speech (skip whisper) |
 | `prune_dead_audio` | `true` | Silero VAD removes silence before transcribing (cleaner punctuation; more speech per 30s window). Falls back to sending raw audio if the VAD model is missing |

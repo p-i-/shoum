@@ -371,8 +371,20 @@ class AppStateCoordinator: KeyMonitorDelegate {
             return
         }
 
+        // Terminal target + the toggle on → deliver via keystroke injection (no
+        // clipboard, no "[Pasted N lines]" collapse). Hide first so the overlay
+        // can't grab focus mid-type; typing runs in the background.
+        if Config.shared.typeIntoTerminals, clipboardManager.rememberedAppIsTerminal {
+            Log.info("[AppState] typing \(text.count) chars into terminal (keystroke injection)")
+            overlayWindow.hide()
+            clipboardManager.typeToRememberedApp(text)
+            currentState = .idle
+            return
+        }
+
         Log.info("[AppState] pasting \(text.count) chars to previous app")
-        clipboardManager.pasteToRememberedApp(text, restoreClipboardAfter: true)
+        clipboardManager.pasteToRememberedApp(
+            text, restoreClipboardAfter: Config.shared.restoreClipboard)
 
         // Hide overlay after a brief delay to ensure paste completes
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in

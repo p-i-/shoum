@@ -59,8 +59,12 @@ Shoum (Swift, menu bar, LSUIElement)
 ├── FuelGaugeView       speech-budget meter: fill toward the 30s whisper window
 │                       (green active / white paused), a red bar per completed
 │                       window, squash-to-fit on overflow
-├── SplashWindow        tabbed Status/Settings window
-└── ClipboardManager    remember/refocus frontmost app; paste via ⌘V
+├── SplashWindow        tabbed Status/Settings window; settings apply instantly
+│                       (no Save button — toggles on change, fields on commit)
+└── ClipboardManager    remember/refocus frontmost app; deliver the result via
+                        ⌘V — or, in terminals (type_into_terminals), by keystroke
+                        injection (Shift+Return for newlines) so Claude Code
+                        doesn't fold it into a "[Pasted N lines]" placeholder
 ```
 
 ## Run modes & on-disk layout
@@ -166,3 +170,19 @@ Installed-mode user files are seeded once from bundled `config.default.yaml` /
     `build/Shoum.app` over the installed one drops it and silently flips the app
     to dev path resolution. `upgrade.sh` copies only the binary + Info.plist for
     exactly this reason.
+13. **A synthetic ⌘V is read by the target when IT processes the event**, which a
+    busy terminal can defer well past when we post it. So restoring the clipboard
+    too soon lets that deferred read grab the *restored* value instead of the
+    payload (observed: pasted text replaced by stale clipboard content). Restore
+    only after a generous delay (1 s) or not at all (`restore_clipboard`). And do
+    NOT cycle the clipboard mid-paste to "chunk" a multi-line paste — it multiplies
+    this race into reliable data loss (an abandoned approach; see git history). One
+    clipboard set + one ⌘V is the only race-free clipboard paste.
+14. **Claude Code's "[Pasted N lines]" collapse is avoided ONLY by raw typed
+    keystrokes, never a bracketed paste.** It's a Claude-Code TUI feature keyed on
+    bracketed-paste size, with no setting to disable it. Wrapping injected text in
+    bracketed-paste markers (`ESC[200~…ESC[201~`) *recreates* the placeholder. So
+    `ClipboardManager.typeToRememberedApp` must stay raw key events +
+    `Shift+Return` newlines — don't "optimise" it into a clipboard ⌘V or a
+    bracketed-paste block. (Terminals only — gated by `type_into_terminals` and a
+    bundle-id allowlist; editors with embedded terminals can't be detected.)
