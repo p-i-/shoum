@@ -69,6 +69,13 @@ class Transcriber {
         body.append("\r\n".data(using: .utf8)!)
         appendField("response_format", "text")
         appendField("temperature", "0.0")
+        // Disable token-level timestamps. The server defaults them ON, which
+        // subdivides segments to attach per-token times — and those cuts land
+        // mid-word ("open p"|"aren") / before punctuation ("generate"|"."). The
+        // server joins segments with "\n" and cleanTranscription re-joins with a
+        // space, so each split became a spurious space. We don't use token times,
+        // and turning them off yields clean word-boundary segments (and is faster).
+        appendField("token_timestamps", "false")
         body.append("--\(boundary)--\r\n".data(using: .utf8)!)
         request.httpBody = body
 
