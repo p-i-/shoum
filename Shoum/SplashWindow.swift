@@ -33,6 +33,8 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
     private let pasteModePopup = NSPopUpButton()
     private let typeIntoTerminalsCheckbox = NSButton(checkboxWithTitle: "Type directly into terminals (Claude-Code friendly)", target: nil, action: nil)
     private let restoreClipboardCheckbox = NSButton(checkboxWithTitle: "Restore clipboard after pasting", target: nil, action: nil)
+    private let voiceCommandsCheckbox = NSButton(checkboxWithTitle: "Voice commands (speak symbols & markdown — see lexicon.md)", target: nil, action: nil)
+    private let showWhisperCheckbox = NSButton(checkboxWithTitle: "Show last whisper response (debug — green pane in the box)", target: nil, action: nil)
     private let loginCheckbox = NSButton(checkboxWithTitle: "Start at login", target: nil, action: nil)
     private let promptTextView = NSTextView()
     private let settingsStatus = NSTextField(labelWithString: "")
@@ -52,7 +54,7 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
     override init() {
         panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 580, height: 580),
-            styleMask: [.titled, .closable],
+            styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false
         )
@@ -60,6 +62,7 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
         panel.isReleasedWhenClosed = false
         panel.level = .normal // not .floating — must not force itself above other apps' windows
         panel.hidesOnDeactivate = false // NSPanel defaults to true → vanishes when app loses focus
+        panel.minSize = NSSize(width: 520, height: 420) // tabs scroll below this
 
         super.init()
         panel.delegate = self
@@ -76,6 +79,11 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
         settingsItem.label = "Settings"
         settingsItem.view = buildSettingsTab()
         tabView.addTabViewItem(settingsItem)
+
+        let commandsItem = NSTabViewItem(identifier: "commands")
+        commandsItem.label = "Commands"
+        commandsItem.view = buildCommandsTab()
+        tabView.addTabViewItem(commandsItem)
 
         let aboutItem = NSTabViewItem(identifier: "about")
         aboutItem.label = "About"
@@ -193,6 +201,8 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
         pruneCheckbox.state = cfg.pruneDeadAudio ? .on : .off
         typeIntoTerminalsCheckbox.state = cfg.typeIntoTerminals ? .on : .off
         restoreClipboardCheckbox.state = cfg.restoreClipboard ? .on : .off
+        voiceCommandsCheckbox.state = cfg.voiceCommands ? .on : .off
+        showWhisperCheckbox.state = cfg.showWhisperResponse ? .on : .off
         doubleTapField.stringValue = String(cfg.doubleTapWindowMs)
         tapMaxField.stringValue = String(cfg.tapMaxMs)
         holdReleaseField.stringValue = String(cfg.holdReleaseMs)
@@ -219,7 +229,8 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
             popup.target = self; popup.action = #selector(settingChanged)
         }
         for box in [useANECheckbox, soundsCheckbox, pruneCheckbox,
-                    typeIntoTerminalsCheckbox, restoreClipboardCheckbox] {
+                    typeIntoTerminalsCheckbox, restoreClipboardCheckbox, voiceCommandsCheckbox,
+                    showWhisperCheckbox] {
             box.target = self; box.action = #selector(settingChanged)
         }
 
@@ -235,6 +246,8 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
         stack.addArrangedSubview(formRow("Paste mode", pasteModePopup))
         stack.addArrangedSubview(typeIntoTerminalsCheckbox)
         stack.addArrangedSubview(restoreClipboardCheckbox)
+        stack.addArrangedSubview(voiceCommandsCheckbox)
+        stack.addArrangedSubview(showWhisperCheckbox)
         stack.addArrangedSubview(soundsCheckbox)
         stack.addArrangedSubview(pruneCheckbox)
 
@@ -349,22 +362,143 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
         return row
     }
 
-    /// Pin a content stack to the top of a tab view and a bottom row to the
-    /// bottom, so the tab fills predictably.
+    /// Pin a scrollable content stack to the top of a tab and a bottom row to the
+    /// bottom. The stack scrolls vertically when it's taller than the window (the
+    /// Settings tab outgrew a fixed window), so it stays usable at any size.
     private func wrapInTab(_ stack: NSView, bottom: NSView) -> NSView {
         let view = NSView()
         bottom.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(stack)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        let scroll = NSScrollView()
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = false
+        scroll.documentView = stack
+
+        view.addSubview(scroll)
         view.addSubview(bottom)
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: view.topAnchor, constant: 16),
-            stack.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 18),
-            stack.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -18),
+            scroll.topAnchor.constraint(equalTo: view.topAnchor, constant: 16),
+            scroll.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 18),
+            scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -18),
+            scroll.bottomAnchor.constraint(equalTo: bottom.topAnchor, constant: -8),
+
             bottom.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 18),
             bottom.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -18),
             bottom.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -14),
+
+            // Stack fills the scroll horizontally and defines its own height (no
+            // bottom pin → intrinsic height → it scrolls vertically when tall).
+            stack.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
+            stack.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: scroll.contentView.trailingAnchor),
+            stack.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
         ])
         return view
+    }
+
+    // MARK: - Commands tab (read-only reference, sourced from CommandProcessor)
+
+    private func buildCommandsTab() -> NSView {
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 9
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        let intro = NSTextField(wrappingLabelWithString:
+            "Speak these to insert symbols and formatting. Prefix a symbol with "
+            + "\u{201C}ascii\u{201D} (\u{201C}ascii slash\u{201D} \u{2192} /), or say "
+            + "\u{201C}mode ascii\u{201D} to drop the prefix until \u{201C}mode normal\u{201D}. "
+            + "Turn the feature on/off with Voice Commands in Settings.")
+        intro.font = .systemFont(ofSize: 11.5)
+        intro.textColor = .secondaryLabelColor
+        intro.preferredMaxLayoutWidth = 520
+        stack.addArrangedSubview(intro)
+
+        func header(_ t: String) -> NSTextField {
+            let l = NSTextField(labelWithString: t)
+            l.font = .systemFont(ofSize: 12, weight: .semibold)
+            return l
+        }
+        func symCell(_ s: String) -> NSTextField {
+            let l = NSTextField(labelWithString: s)
+            l.font = .monospacedSystemFont(ofSize: 12, weight: .medium)
+            return l
+        }
+        func nameCell(_ s: String) -> NSTextField {
+            let l = NSTextField(labelWithString: s)
+            l.font = .systemFont(ofSize: 11.5)
+            l.textColor = .secondaryLabelColor
+            return l
+        }
+        // A symbol|name 2-column grid for one slice of entries.
+        func subGrid(_ entries: [(String, String)]) -> NSGridView {
+            let cells: [[NSView]] = entries.isEmpty ? [[NSView(), NSView()]]
+                : entries.map { [symCell($0.0), nameCell($0.1)] }
+            let g = NSGridView(views: cells)
+            g.rowSpacing = 3
+            g.columnSpacing = 8
+            g.column(at: 0).xPlacement = .leading
+            g.column(at: 1).xPlacement = .leading
+            return g
+        }
+        // `cols` EQUAL-width columns (each 1/3 of the width), filled COLUMN-MAJOR
+        // (all of column 1 down, then column 2, …) so the lexicon's grouping stays
+        // vertically adjacent.
+        func columns(_ entries: [(String, String)], _ cols: Int) -> NSStackView {
+            let n = entries.count
+            let per = max(1, (n + cols - 1) / cols)
+            let subs: [NSView] = (0..<cols).map { c in
+                subGrid(Array(entries[min(c * per, n)..<min(c * per + per, n)]))
+            }
+            let h = NSStackView(views: subs)
+            h.orientation = .horizontal
+            h.distribution = .fillEqually
+            h.alignment = .top
+            h.spacing = 12
+            return h
+        }
+
+        stack.addArrangedSubview(header("Symbols \u{2014} say \u{201C}ascii <name>\u{201D}"))
+        let symCols = columns(CommandProcessor.symbols.map { ($0.0, $0.1.first ?? "") }, 3)
+        stack.addArrangedSubview(symCols)
+        symCols.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+
+        stack.addArrangedSubview(header("Bare words \u{2014} no prefix needed"))
+        let bareDisplay: [(String, String)] = CommandProcessor.bareWords.map { (out, names) in
+            let label = out == "\n\n" ? "blank line" : out == "\n" ? "line break" : out
+            return (label, names.joined(separator: ", "))
+        }
+        stack.addArrangedSubview(subGrid(bareDisplay))
+
+        stack.addArrangedSubview(header("Modes & casing"))
+        for line in [
+            "mode ascii \u{2026} mode normal \u{2014} symbols without the \u{201C}ascii\u{201D} prefix",
+            "mode all caps \u{2026} mode normal \u{2014} UPPERCASE the span",
+            "cap <word> \u{2014} capitalise the next word",
+        ] {
+            let l = NSTextField(wrappingLabelWithString: "\u{2022}  " + line)
+            l.font = .systemFont(ofSize: 11.5)
+            l.preferredMaxLayoutWidth = 520
+            stack.addArrangedSubview(l)
+        }
+
+        let note = NSTextField(wrappingLabelWithString:
+            "Many symbols accept synonyms (e.g. \u{201C}star\u{201D} = \u{201C}asterisk\u{201D}); "
+            + "the full list and rules are in lexicon.md.")
+        note.font = .systemFont(ofSize: 10.5)
+        note.textColor = .tertiaryLabelColor
+        note.preferredMaxLayoutWidth = 520
+        stack.setCustomSpacing(14, after: stack.arrangedSubviews.last!)
+        stack.addArrangedSubview(note)
+
+        let close = NSButton(title: "Close", target: self, action: #selector(closeClicked))
+        let bottom = NSStackView(views: [NSView(), close])
+        bottom.orientation = .horizontal
+        return wrapInTab(stack, bottom: bottom)
     }
 
     // MARK: - Public API (used by AppDelegate / ReadinessChecker)
@@ -495,6 +629,8 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
             "paste_mode": pasteModePopup.titleOfSelectedItem ?? "paste",
             "type_into_terminals": typeIntoTerminalsCheckbox.state == .on ? "true" : "false",
             "restore_clipboard": restoreClipboardCheckbox.state == .on ? "true" : "false",
+            "voice_commands": voiceCommandsCheckbox.state == .on ? "true" : "false",
+            "show_whisper_response": showWhisperCheckbox.state == .on ? "true" : "false",
         ]
     }
 

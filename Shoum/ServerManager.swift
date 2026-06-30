@@ -12,12 +12,15 @@ class ServerManager {
     }
 
     private var prompt: String {
-        let promptPath = Config.promptFilePath
-        if let text = try? String(contentsOfFile: promptPath, encoding: .utf8) {
+        var base = "A technical discussion about AI and software engineering."
+        if let text = try? String(contentsOfFile: Config.promptFilePath, encoding: .utf8) {
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty { return trimmed }
+            if !trimmed.isEmpty { base = trimmed }
         }
-        return "A technical discussion about AI and software engineering."
+        // Append the command primer LAST: whisper truncates the initial prompt to
+        // its tail, so the control vocabulary stays in the most-recent context.
+        guard Config.shared.voiceCommands else { return base }
+        return base + " " + CommandProcessor.primer
     }
 
     func start() {

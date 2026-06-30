@@ -282,10 +282,15 @@ class AppStateCoordinator: KeyMonitorDelegate {
         Log.info("[AppState] transcription OK: \(text.count) chars: \"\(String(text.prefix(80)))\"")
         playSound(.success)
 
+        // Run spoken symbol/markdown commands ("ascii slash" → /) before the
+        // chunk lands; see CommandProcessor / lexicon.md. Off → raw text.
+        let chunk = Config.shared.voiceCommands ? CommandProcessor.process(text) : text
+
         // The 🧠 marker becomes the transcribed text. The clipboard is left
         // untouched until the user confirms (single-tap) so dictating never
         // clobbers what they had copied; confirmAndPaste borrows it then restores.
-        overlayWindow.finish(with: text)
+        overlayWindow.finish(with: chunk)
+        overlayWindow.showWhisperResponse(Config.shared.showWhisperResponse ? text : nil)
 
         // Capture this conversion for the flag feature: the exact audio sent to
         // the engine plus the smartJoin I/O `finish` just produced. Held until
@@ -299,7 +304,7 @@ class AppStateCoordinator: KeyMonitorDelegate {
             model: Config.shared.model,
             prompt: FlagStore.currentPrompt(),
             timestamp: Date(),
-            chunk: splice?.chunk ?? text,
+            chunk: splice?.chunk ?? chunk,
             boxBefore: splice?.boxBefore ?? "",
             boxAfter: splice?.boxAfter ?? overlayWindow.getText(),
             replaced: splice?.replaced ?? ""))

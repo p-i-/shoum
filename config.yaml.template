@@ -58,6 +58,11 @@ type_into_terminals: false
 # the dictated text on the clipboard instead (and skip the restore entirely).
 restore_clipboard: true
 
+# Process spoken symbol/markdown commands: "ascii slash" -> /, "new paragraph" ->
+# blank line, "cap apple" -> Apple, "mode ascii ... mode normal", etc. The full
+# lexicon and rules are in lexicon.md. Set false to insert the raw transcription.
+voice_commands: true
+
 # Keep recorded WAVs in /tmp/shoum/wavs for 24h so misfires can be inspected,
 # then auto-pruned. Set false to delete each clip right after transcription.
 keep_recordings: true

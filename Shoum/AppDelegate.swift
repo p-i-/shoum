@@ -149,6 +149,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessD
 
         menu.addItem(menuItem("Status…", "waveform.circle", #selector(openStatusTab)))
         menu.addItem(menuItem("Settings…", "gearshape", #selector(openSettingsTab), key: ","))
+        menu.addItem(menuItem("Commands…", "list.bullet", #selector(openCommandsTab)))
         menu.addItem(menuItem("About…", "info.circle", #selector(openAboutTab)))
 
         // Flag the last conversion for later review — only when there is one.
@@ -208,20 +209,28 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessD
         alert.addButton(withTitle: "Flag")
         alert.addButton(withTitle: "Cancel")
 
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
-        field.placeholderString = "What it should have said (optional)"
-        alert.accessoryView = field
+        // Multi-line note field (~3 lines visible) in a scroll view.
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 300, height: 58))
+        scroll.borderType = .bezelBorder
+        scroll.hasVerticalScroller = true
+        let field = NSTextView(frame: scroll.bounds)
+        field.font = .systemFont(ofSize: 12)
+        field.isRichText = false
+        field.textContainerInset = NSSize(width: 4, height: 4)
+        scroll.documentView = field
+        alert.accessoryView = scroll
         alert.window.initialFirstResponder = field
 
         NSApp.activate(ignoringOtherApps: true)
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
-        let ok = appStateCoordinator?.flagLastInteraction(note: field.stringValue) ?? false
+        let ok = appStateCoordinator?.flagLastInteraction(note: field.string) ?? false
         if ok, Config.shared.sounds { NSSound(named: "Glass")?.play() }
     }
 
     @objc private func openStatusTab()   { splash.show(tab: "status") }
     @objc private func openSettingsTab() { splash.show(tab: "settings") }
+    @objc private func openCommandsTab() { splash.show(tab: "commands") }
     @objc private func openAboutTab()    { splash.show(tab: "about") }
     @objc private func openUpdate()      { NSWorkspace.shared.open(UpdateChecker.repoURL) }
 

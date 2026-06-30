@@ -8,6 +8,20 @@ class OverlayWindow {
     let spectrogram = SpectrogramView(frame: .zero)
     let fuelGauge = FuelGaugeView(frame: .zero)
 
+    /// Debug pane: the raw whisper response for the most recent chunk, in green.
+    /// Hidden (height 0) unless `show_whisper_response` is on. See showWhisperResponse.
+    private let whisperLabel: NSTextField = {
+        let l = NSTextField(wrappingLabelWithString: "")
+        l.font = .monospacedSystemFont(ofSize: 10.5, weight: .regular)
+        l.textColor = .systemGreen
+        l.maximumNumberOfLines = 3
+        l.lineBreakMode = .byTruncatingTail
+        l.translatesAutoresizingMaskIntoConstraints = false
+        l.isHidden = true
+        return l
+    }()
+    private var whisperHeight: NSLayoutConstraint!
+
     /// Marks the in-text recording indicator so it can be found and replaced
     /// even if the user edits around it. Never matched by glyph — the user
     /// could legitimately type a 🎙️.
@@ -109,9 +123,11 @@ class OverlayWindow {
         // Layout
         visualEffectView.addSubview(spectrogram)
         visualEffectView.addSubview(fuelGauge)
+        visualEffectView.addSubview(whisperLabel)
         visualEffectView.addSubview(scrollView)
         panel.contentView = visualEffectView
 
+        whisperHeight = whisperLabel.heightAnchor.constraint(equalToConstant: 0)
         NSLayoutConstraint.activate([
             spectrogram.topAnchor.constraint(equalTo: visualEffectView.topAnchor, constant: 10),
             spectrogram.leadingAnchor.constraint(equalTo: visualEffectView.leadingAnchor, constant: 12),
@@ -123,7 +139,12 @@ class OverlayWindow {
             fuelGauge.trailingAnchor.constraint(equalTo: spectrogram.trailingAnchor),
             fuelGauge.heightAnchor.constraint(equalToConstant: 4),
 
-            scrollView.topAnchor.constraint(equalTo: fuelGauge.bottomAnchor, constant: 8),
+            whisperLabel.topAnchor.constraint(equalTo: fuelGauge.bottomAnchor, constant: 6),
+            whisperLabel.leadingAnchor.constraint(equalTo: visualEffectView.leadingAnchor, constant: 12),
+            whisperLabel.trailingAnchor.constraint(equalTo: visualEffectView.trailingAnchor, constant: -12),
+            whisperHeight,
+
+            scrollView.topAnchor.constraint(equalTo: whisperLabel.bottomAnchor, constant: 8),
             scrollView.leadingAnchor.constraint(equalTo: visualEffectView.leadingAnchor, constant: 12),
             scrollView.trailingAnchor.constraint(equalTo: visualEffectView.trailingAnchor, constant: -12),
             scrollView.bottomAnchor.constraint(equalTo: visualEffectView.bottomAnchor, constant: -12),
@@ -186,6 +207,22 @@ class OverlayWindow {
         spectrogram.mode = .idle
         spectrogram.clear()
         fuelGauge.isHidden = true
+        showWhisperResponse(nil)
+    }
+
+    /// Show the raw whisper response for the latest chunk in the green debug pane
+    /// (or hide it when `text` is nil — e.g. the toggle is off). Lets you see what
+    /// whisper actually produced before command processing.
+    func showWhisperResponse(_ text: String?) {
+        if let t = text, !t.isEmpty {
+            whisperLabel.stringValue = "whisper › " + t
+            whisperLabel.isHidden = false
+            whisperHeight.constant = 42
+        } else {
+            whisperLabel.stringValue = ""
+            whisperLabel.isHidden = true
+            whisperHeight.constant = 0
+        }
     }
 
     // MARK: - Recording lifecycle

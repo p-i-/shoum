@@ -39,6 +39,9 @@ Shoum (Swift, menu bar, LSUIElement)
 ├── AudioRecorder       one AVAudioEngine, prepared at launch; taps mic,
 │                       converts to 16kHz mono WAV; feeds SpectrogramView
 ├── Transcriber         HTTP client → localhost whisper-server /inference
+├── CommandProcessor    pure: spoken commands → symbols/markdown ("ascii slash"
+│                       → /, modes, casing). The lexicon IS its tables — see
+│                       lexicon.md. Applied to each chunk before smartJoin.
 ├── ServerManager       owns the resident whisper-server child process
 ├── ReadinessChecker    startup checklist; tails server.log markers; real test inference
 ├── OverlayWindow       floating editor; 🎙️/🧠 marker; smartJoin splicing
