@@ -32,6 +32,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessD
         // Set up status item
         setupStatusItem()
 
+        // Standard Edit menu so the dictation box gets native Cut/Copy/Paste/
+        // Select All/Undo/Redo + the Emoji & Symbols palette.
+        setupMainMenu()
+
         splash = SplashWindow()
         splash.show() // foreground our window; the modal is now user-triggered via its button
 
@@ -88,6 +92,48 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessD
         let menu = NSMenu()
         menu.delegate = self
         statusItem.menu = menu
+    }
+
+    // MARK: - Main menu (Edit)
+
+    /// As an `LSUIElement` app with no nib, we have no menu bar — so the standard
+    /// editing shortcuts (⌘C/⌘V/⌘X/⌘A, ⌘Z/⌘⇧Z) and the Emoji & Symbols palette
+    /// (⌃⌘Space) have nowhere to dispatch, even though the dictation box's
+    /// NSTextView is first responder. A minimal main menu fixes all of them at
+    /// once: each item targets the first responder (nil), so AppKit routes the
+    /// key equivalents into the text view through the responder chain. The menu
+    /// bar shows only while one of our windows is key.
+    private func setupMainMenu() {
+        let mainMenu = NSMenu()
+
+        // App menu (first slot; macOS labels it with the app name).
+        let appItem = NSMenuItem()
+        mainMenu.addItem(appItem)
+        let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "Quit Shoum",
+                        action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appItem.submenu = appMenu
+
+        // Edit menu.
+        let editItem = NSMenuItem()
+        mainMenu.addItem(editItem)
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        let redo = editMenu.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editMenu.addItem(.separator())
+        let emoji = editMenu.addItem(withTitle: "Emoji & Symbols",
+                                     action: #selector(NSApplication.orderFrontCharacterPalette(_:)),
+                                     keyEquivalent: " ")
+        emoji.keyEquivalentModifierMask = [.command, .control]
+        editItem.submenu = editMenu
+
+        NSApp.mainMenu = mainMenu
     }
 
     // MARK: - Status-item menu (NSMenuDelegate)

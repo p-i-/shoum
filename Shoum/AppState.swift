@@ -444,21 +444,10 @@ class AppStateCoordinator: KeyMonitorDelegate {
                 }
             }
 
-            // Cmd+Z / Cmd+Shift+Z → undo/redo in the dictation box. This is an
-            // accessory app with no Edit menu, so the standard Cmd+Z key
-            // equivalent is never dispatched to undo: — route it to the box's
-            // own undo manager here, the same way Escape is handled.
-            if self.currentState == .editing,
-               event.modifierFlags.contains(.command),
-               event.charactersIgnoringModifiers?.lowercased() == "z" {
-                let undoManager = self.overlayWindow.textView.undoManager
-                if event.modifierFlags.contains(.shift) {
-                    undoManager?.redo()
-                } else {
-                    undoManager?.undo()
-                }
-                return nil // Consume the event
-            }
+            // Undo/redo (⌘Z / ⌘⇧Z) and Cut/Copy/Paste/Select All/Emoji are now
+            // handled natively by the app's Edit menu (AppDelegate.setupMainMenu),
+            // which routes the standard key equivalents to the text view through
+            // the responder chain — no manual interception needed here.
             return event
         }
     }
