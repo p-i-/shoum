@@ -33,16 +33,15 @@ class OverlayWindow {
     /// capitalization is inherited by the transcribed chunk.
     private var replacedSelectionText = ""
 
-    /// The smartJoin I/O from the most recent successful `finish` — captured for
-    /// the flag feature so a post-processing splice can be reproduced exactly.
-    /// Only set on the success path (text != nil); read right after `finish`.
+    /// The smartJoin I/O a successful `finish` performed — returned to the
+    /// caller for the flag feature so a post-processing splice can be
+    /// reproduced exactly.
     struct SpliceRecord {
         let boxBefore: String   // box text before the splice, marker included
         let replaced: String    // selection the marker replaced
         let chunk: String       // transcription going in
         let boxAfter: String    // box text after the splice
     }
-    private(set) var lastSplice: SpliceRecord?
 
     var isVisible: Bool {
         panel.isVisible
@@ -204,6 +203,9 @@ class OverlayWindow {
     func hide() {
         panel.orderOut(nil)
         textView.string = ""
+        // Setting .string doesn't clear the undo stack — without this, ⌘Z in the
+        // next session would resurrect the previous session's text.
+        textView.undoManager?.removeAllActions()
         spectrogram.mode = .idle
         spectrogram.clear()
         fuelGauge.isHidden = true
@@ -248,18 +250,20 @@ class OverlayWindow {
 
     /// Transcription finished. Marker becomes the text (or vanishes when
     /// there's nothing to insert), with capitalization/punctuation/spacing
-    /// adjusted to fit the surrounding text.
-    func finish(with text: String?) {
+    /// adjusted to fit the surrounding text. Returns the splice it performed
+    /// (nil when there was no text to insert).
+    @discardableResult
+    func finish(with text: String?) -> SpliceRecord? {
         spectrogram.mode = .idle
         fuelGauge.isHidden = true // processing done — gauge disappears
         guard let range = markerRange(), let storage = textView.textStorage else {
             if let text = text {
                 let before = textView.string
                 insertTextAtCursor(text)
-                lastSplice = SpliceRecord(
+                return SpliceRecord(
                     boxBefore: before, replaced: "", chunk: text, boxAfter: textView.string)
             }
-            return
+            return nil
         }
 
         // Box text before any mutation (the 🧠 marker still in place encodes the
@@ -280,10 +284,10 @@ class OverlayWindow {
             // Transcription failed/empty: leave the original selection in place
             // rather than deleting it along with the marker.
             textView.setSelectedRange(NSRange(location: range.location + restored.length, length: 0))
-            return
+            return nil
         }
 
-        let replacement = Self.smartJoin(
+        let replacement = TextSplicer.smartJoin(
             chunk: text, left: left, right: right, replaced: replacedSelectionText)
         if textView.shouldChangeText(in: restored, replacementString: replacement) {
             storage.replaceCharacters(
@@ -294,69 +298,9 @@ class OverlayWindow {
         textView.setSelectedRange(cursor)
         textView.scrollRangeToVisible(cursor)
 
-        lastSplice = SpliceRecord(
+        return SpliceRecord(
             boxBefore: boxBeforeWithMarker, replaced: replacedSelectionText,
             chunk: text, boxAfter: storage.string)
-    }
-
-    /// Whisper emits each chunk as a standalone sentence ("Putting it through
-    /// its paces."); splice it to fit where it lands.
-    static func smartJoin(chunk rawChunk: String, left: String, right: String, replaced: String) -> String {
-        var chunk = rawChunk.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !chunk.isEmpty else { return chunk }
-
-        let leftTrimmed = left.replacingOccurrences(
-            of: "[ \\t]+$", with: "", options: .regularExpression)
-        let rightTrimmed = right.replacingOccurrences(
-            of: "^[ \\t]+", with: "", options: .regularExpression)
-
-        // --- First-letter case ---
-        // Never touch "I..." or acronyms; whisper capitalizes proper nouns on
-        // its own and lowercasing those is rarer than mid-sentence splices.
-        let firstWord = chunk.split(separator: " ").first.map(String.init) ?? chunk
-        let looksProtected = firstWord == "I" || firstWord.hasPrefix("I'")
-            || firstWord.count >= 2 && firstWord.prefix(2).allSatisfy { $0.isUppercase }
-
-        if !looksProtected {
-            if let replacedFirst = replaced.first(where: { $0.isLetter }) {
-                // Inherit the replaced selection's case
-                chunk = replacedFirst.isLowercase ? lowercasedFirst(chunk) : chunk
-            } else if !leftTrimmed.isEmpty, !leftTrimmed.hasSuffix("\n") {
-                // No selection: lowercase unless we're starting a sentence
-                let sentenceEnders: Set<Character> = [".", "!", "?", "…"]
-                if let lastChar = leftTrimmed.last, !sentenceEnders.contains(lastChar) {
-                    chunk = lowercasedFirst(chunk)
-                }
-            }
-        }
-
-        // --- Trailing period ---
-        // Drop the chunk's final "." when the text continues mid-sentence
-        // (next char is lowercase or punctuation, incl. an existing ".").
-        if chunk.hasSuffix(".") && !chunk.hasSuffix("..") {
-            if let next = rightTrimmed.first, next.isLowercase || next.isPunctuation {
-                chunk = String(chunk.dropLast())
-            }
-        }
-
-        // --- Spacing at the seams ---
-        let punctuationStart: Set<Character> = [",", ".", ";", ":", "!", "?", ")", "]", "}", "…"]
-        if let lastLeft = left.last, !lastLeft.isWhitespace, !lastLeft.isNewline,
-           let first = chunk.first, !punctuationStart.contains(first) {
-            chunk = " " + chunk
-        }
-        if let firstRight = right.first, !firstRight.isWhitespace,
-           !punctuationStart.contains(firstRight),
-           let last = chunk.last, !last.isWhitespace {
-            chunk += " "
-        }
-
-        return chunk
-    }
-
-    private static func lowercasedFirst(_ s: String) -> String {
-        guard let first = s.first else { return s }
-        return first.lowercased() + s.dropFirst()
     }
 
     // MARK: - Text
@@ -404,7 +348,13 @@ class OverlayWindow {
     }
 
     private func replaceMarker(glyph: String) {
-        guard let range = markerRange(), let storage = textView.textStorage else { return }
+        guard let range = markerRange(), let storage = textView.textStorage else {
+            // Not an invariant violation: the user can edit the marker away
+            // while recording (finish() then inserts at the cursor instead) —
+            // but log it, since it also shows up in state-desync traces.
+            Log.debug("[OverlayWindow] replaceMarker(\(glyph)): no marker present (user edited it away?)")
+            return
+        }
         var attrs = textAttributes()
         attrs[Self.markerAttribute] = true
         storage.replaceCharacters(in: range, with: NSAttributedString(string: glyph, attributes: attrs))

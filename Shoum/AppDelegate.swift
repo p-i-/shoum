@@ -10,6 +10,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessD
     private var splash: SplashWindow!
     private let updateChecker = UpdateChecker()
     private var updateAvailable = false
+    private var updateTimer: Timer?
     /// Fire the one-shot Accessibility prompt at most once per launch.
     private var didAutoPromptAccessibility = false
     /// One-shot observer that re-foregrounds our window once the user returns
@@ -55,9 +56,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessD
         }
 
         // Notify-only update check (async; the menu reads `updateAvailable` the
-        // next time it opens).
+        // next time it opens). Re-checked daily — as a login item the app can
+        // run for weeks, so once-per-launch would go stale.
         updateChecker.check { [weak self] available in
             self?.updateAvailable = available
+        }
+        updateTimer = Timer.scheduledTimer(withTimeInterval: 24 * 3600, repeats: true) { [weak self] _ in
+            self?.updateChecker.check { available in
+                self?.updateAvailable = available
+            }
         }
 
         Log.info("[Shoum] Startup checks running")
@@ -151,6 +158,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessD
         menu.addItem(menuItem("Settings…", "gearshape", #selector(openSettingsTab), key: ","))
         menu.addItem(menuItem("Commands…", "list.bullet", #selector(openCommandsTab)))
         menu.addItem(menuItem("About…", "info.circle", #selector(openAboutTab)))
+        menu.addItem(menuItem("Report an issue…", "exclamationmark.bubble", #selector(reportIssue)))
 
         // Flag the last conversion for later review — only when there is one.
         if appStateCoordinator?.hasFlaggableInteraction == true {
@@ -165,6 +173,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessD
         }
 
         menu.addItem(.separator())
+        menu.addItem(menuItem("Restart Engine", "arrow.clockwise", #selector(restartEngine)))
         menu.addItem(menuItem("Quit Shoum", "power", #selector(quit), key: "q"))
     }
 
@@ -178,7 +187,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessD
     private func statusLineTitle() -> String {
         let readiness = appStateCoordinator.readiness
         if readiness.anyFailed { return "Setup needed — open Status" }
-        if readiness.anyWarning { return "Permission needed — open Status" }
+        if readiness.engineRestarting { return "Restarting engine…" }
+        if readiness.anyWarning, !readiness.isReady { return "Action needed — open Status" }
         if !readiness.isReady { return "Starting…" }
         switch appStateCoordinator.currentState {
         case .idle:       return "Ready — double-tap ⇧ to dictate"
@@ -234,21 +244,40 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessD
     @objc private func openAboutTab()    { splash.show(tab: "about") }
     @objc private func openUpdate()      { NSWorkspace.shared.open(UpdateChecker.repoURL) }
 
+    /// Preview-then-open a prefilled GitHub issue (text only, logs opt-in —
+    /// see IssueReporter's privacy contract).
+    @objc private func reportIssue() {
+        IssueReporter(readiness: appStateCoordinator?.readiness).run()
+    }
+
+    /// Docker-style engine restart: relaunch whisper-server, re-verify with a
+    /// round-trip (menu status shows "Restarting engine…" meanwhile).
+    @objc private func restartEngine() {
+        appStateCoordinator?.restartEngine()
+    }
+
     @objc private func quit() {
         NSApp.terminate(nil)
     }
 
-    /// The tray glyph is constant. Drawn as a template normally (auto-adapts to
-    /// the bar); tinted red on failure. `contentTintColor` on a TEMPLATE status
-    /// image draws NOTHING — so the red state is a NON-template tinted copy
-    /// (confirmed root cause, see TRAYBUG.md).
-    private func setTray(red: Bool) {
+    /// Tray health: plain = working, yellow = degraded-but-usable (a warning
+    /// needs the user), red = dictation cannot work. The glyph itself is
+    /// constant; only its tint conveys health.
+    private enum TrayHealth { case ok, warning, error }
+
+    /// `contentTintColor` on a TEMPLATE status image draws NOTHING — so the
+    /// colored states are NON-template tinted copies (confirmed root cause,
+    /// see ARCHITECTURE.md invariant 7).
+    private func setTray(_ health: TrayHealth) {
         guard let button = statusItem?.button, let glyph = trayGlyph else { return }
-        if red {
-            button.image = tinted(glyph, .systemRed)
-        } else {
+        switch health {
+        case .ok:
             glyph.isTemplate = true
             button.image = glyph
+        case .warning:
+            button.image = tinted(glyph, .systemYellow)
+        case .error:
+            button.image = tinted(glyph, .systemRed)
         }
     }
 
@@ -315,20 +344,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessD
             everFailed = true
             splash.markFailed()
             stopPulse()
-            setTray(red: true)
+            setTray(.error)
             // A failure should be seen even if the splash was closed
             if !splash.isVisible { splash.show() }
         } else if readiness.anyWarning {
-            // Something needs the user (e.g. Accessibility) — surface it, but as a
-            // ⚠️, not a red failure. everFailed keeps the post-grant window/
-            // re-foreground handling that onboarding relies on.
+            // Something needs the user (permission grant, missing VAD model) —
+            // degraded-but-usable: yellow, not red. everFailed keeps the
+            // post-grant window/re-foreground handling onboarding relies on.
             everFailed = true
             splash.markWarning()
-            setTray(red: false)
+            setTray(.warning)
             startPulse()
             if !splash.isVisible { splash.show() }
         } else if !readiness.isReady {
-            setTray(red: false)
+            setTray(.ok)
             startPulse() // constant glyph, pulsing while loading
         }
     }
@@ -343,15 +372,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate, ReadinessD
             armPostOnboardingForeground()
         }
         stopPulse()
-        setTray(red: false) // constant glyph once ready
+        // Ready gates on mic+engine+hotkey only — a lingering warning (e.g. a
+        // missing VAD model) keeps the tray yellow even though dictation works.
+        setTray(appStateCoordinator.readiness.anyWarning ? .warning : .ok)
     }
 
     // MARK: - AppStateDelegate
 
-    func appStateDidChange(to state: ShoumState) {
-        // The tray glyph is constant — recording/processing/editing are conveyed
-        // by the overlay window and the status-line title, not the menu-bar icon.
-    }
+    // (No per-state callback: the tray glyph is constant — recording/processing/
+    // editing are conveyed by the overlay window, and the status-line title reads
+    // currentState when the menu opens.)
 
     func appStateNeedsAttention() {
         splash.show()

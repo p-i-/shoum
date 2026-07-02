@@ -563,9 +563,15 @@ causal/no-fill-in-middle, not instruction-tuned).
   in `AppState` (INFO); keep `log_level: debug` to also capture `KeyMonitor`'s
   tap decisions, then `grep -E '\[KeyMonitor\]|\[AppState\]' log.txt`. Do NOT fix
   before a captured trace. Full notes in memory `bug-box-vanishes-on-tap`.
-- **Cancellable Transcriber.** ESC during "Processing…" can't abort the in-flight
-  request (hand-rolled semaphore + `Thread.sleep` retries); should become a
-  cancellable async task.
+  UPDATE 2026-07-02: two candidate causes FIXED in `KeyMonitor` — (a) an
+  actioned tap no longer chains into a double-tap (delegate returns "consumed");
+  (b) the single-tap timer now re-validates against the HID system's hardware
+  record and defers when a flagsChanged is still queued behind a busy main
+  thread. If the vanish recurs, the new debug lines ("verdict deferred", "first
+  tap ALREADY FIRED") will say which path fired.
+- ~~**Cancellable Transcriber.**~~ DONE 2026-07-02: rewritten as a cancellable
+  async Task; ESC during 🧠 now aborts (same semantics as ESC-while-recording).
+  File cleanup for the cancel path is owned by `RecordingArtifacts`.
 - **Gesture state-machine extraction.** Extract the decision logic as a pure
   `(event, timestamp) → action` function so it's unit-testable by replaying
   recorded `log.txt` traces (including the timestamp-lag regression). A middle

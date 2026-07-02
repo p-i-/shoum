@@ -3,6 +3,7 @@
 .venv-coreml/
 build/
 log.txt
+log.txt.1
 server.log
 whisper.cpp/
 

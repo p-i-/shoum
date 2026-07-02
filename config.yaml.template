@@ -79,7 +79,7 @@ prune_dead_audio: true
 # aggressively; lower to let quieter clips through.
 min_speech_dbfs: -60
 
-# Check GitHub on launch and show "Update available" in the menu if a newer build
-# exists. This is the only network call Shoum makes (metadata only — one commit
-# hash). Set false to disable it entirely.
+# Check GitHub on launch and once a day while running; show "Update available"
+# in the menu if a newer build exists. This is the only network call Shoum makes
+# (metadata only — one commit hash). Set false to disable it entirely.
 check_for_updates: true

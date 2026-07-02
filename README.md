@@ -12,7 +12,7 @@ The entire interface is the **left shift key**:
 | single tap (while recording) | stop & transcribe |
 | double-tap **and hold** | push-to-talk: release stops |
 | single tap (while editing) | paste result into the previous app |
-| Escape | cancel recording, then close the box |
+| Escape | cancel recording or transcription, then close the box |
 | ⌘Z / ⌘⇧Z | undo / redo a dictated chunk |
 
 Normal shift use (capitals, shift-click) never triggers anything: any
@@ -78,6 +78,11 @@ Skip the installer and iterate from the clone:
 ./run.sh     # foreground, logs stream to terminal + log.txt; Ctrl+C to quit
 ```
 
+`build.sh` first runs the unit tests (`tests/run-tests.swift` — the voice-command
+lexicon and smartJoin splicing); a failure fails the build. `--dev` compiles with
+assertions live (`-Onone`), so a broken internal invariant stops a dev run at the
+point of breakage; the installed `--static` build logs it and degrades instead.
+
 `run.sh` enforces one instance at a time: it refuses to start if a dev build is
 already running, and temporarily stops the installed app (relaunching it when
 you quit) so the two never fight over the hotkey and the whisper-server.
@@ -131,7 +136,7 @@ back to defaults.
 | `keep_recordings` | `true` | retain WAVs in `/tmp/shoum/wavs` for 24h (debugging) |
 | `min_speech_dbfs` | `-60` | clips never louder than this are treated as no-speech (skip whisper) |
 | `prune_dead_audio` | `true` | Silero VAD removes silence before transcribing (cleaner punctuation; more speech per 30s window). Falls back to sending raw audio if the VAD model is missing |
-| `check_for_updates` | `true` | check GitHub on launch; notify in the menu if a newer build exists |
+| `check_for_updates` | `true` | check GitHub on launch and daily; notify in the menu if a newer build exists |
 
 Vocabulary biasing lives in `prompt.txt` (free prose; whisper takes ~220 tokens
 as its initial prompt). Edit it in the Settings tab or directly (same locations
@@ -156,9 +161,11 @@ normal`, etc. The full lexicon, rules, and how to revise it are in
 ## Debugging
 
 - **App log** — every gesture decision (with ms timings at `log_level: debug`),
-  recording start/stop, transcription results, server retries.
+  recording start/stop, transcription results, server retries. The previous
+  session's log (including any crash report) is rotated to `<log>.1`, not lost.
 - **server.log** — whisper-server's own output (model load phases, per-request
-  errors). Truncated each launch.
+  errors). Truncated once per app launch; crash-relaunches append with a banner
+  so a crash loop can't destroy its own evidence.
 - **`tools/mic-test.sh`** — standalone smoke test of the mic→16kHz→WAV pipeline.
 - **Status tab** (click the menu-bar icon → Status…) — live ✅/❌ per subsystem, the
   install paths, and **Open Settings…** deep-links for missing permissions.

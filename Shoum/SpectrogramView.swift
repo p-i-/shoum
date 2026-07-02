@@ -16,6 +16,7 @@ final class SpectrogramView: NSView {
         didSet {
             guard mode != oldValue else { return }
             let live = (mode == .live)
+            liveLock.lock(); liveForAudioThread = live; liveLock.unlock()
             queue.async { [weak self] in
                 if !live { self?.source.flush() } // close the final box before resetting
                 self?.source.resetPending()
@@ -25,6 +26,11 @@ final class SpectrogramView: NSView {
             tickAccumulator = 0
         }
     }
+
+    /// `mode` mirrored for the audio thread: `push16k` is called from the audio
+    /// tap while `mode` is mutated on main — reading `mode` there is a data race.
+    private let liveLock = NSLock()
+    private var liveForAudioThread = false
 
     /// Emitted (main thread) with (accumulated speech seconds, actively-capturing)
     /// — drives the fuel gauge. Set by the owner.
@@ -86,7 +92,8 @@ final class SpectrogramView: NSView {
     /// Called from the audio tap (any thread) with 16 kHz mono samples; cheap
     /// hand-off to the DSP queue (classification happens on the tick).
     func push16k(_ samples: [Float]) {
-        guard mode == .live else { return }
+        liveLock.lock(); let live = liveForAudioThread; liveLock.unlock()
+        guard live else { return }
         queue.async { [weak self] in self?.source.push16k(samples) }
     }
 

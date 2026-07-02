@@ -1,9 +1,9 @@
 import Foundation
 
 /// Turns spoken command words into symbols and formatting — "speak markdown".
-/// Pure and static (like `OverlayWindow.smartJoin`): no state between calls, so
-/// it's easy to test and reason about. Applied to each transcription chunk
-/// before it splices into the box.
+/// Pure and static (like `TextSplicer.smartJoin`): no state between calls, so
+/// it's easy to test and reason about (see tests/run-tests.swift). Applied to
+/// each transcription chunk before it splices into the box.
 ///
 /// THE FULL MODEL, THE DEFAULT LEXICON, THE SPACING RULES, AND HOW TO REVISE ARE
 /// DOCUMENTED IN `lexicon.md` — read that first. The data below IS the lexicon;

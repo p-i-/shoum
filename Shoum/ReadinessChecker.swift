@@ -7,6 +7,7 @@ enum CheckItem: Int, CaseIterable {
     case micPermission
     case micLive
     case files
+    case vad
     case serverModel
     case serverANE
     case serverReady
@@ -18,6 +19,7 @@ enum CheckItem: Int, CaseIterable {
         case .micPermission: return "Microphone permission"
         case .micLive:       return "Microphone live"
         case .files:         return "Binaries & model files"
+        case .vad:           return "Silence culling (VAD)"
         case .serverModel:   return "Whisper model load"
         case .serverANE:     return "Neural Engine compile"
         case .serverReady:   return "Server inference"
@@ -74,13 +76,11 @@ class ReadinessChecker {
 
     private var logTimer: Timer?
     private var aneCompileStart: TimeInterval?
-    private var roundtripStarted = false
     private let watchStart = ProcessInfo.processInfo.systemUptime
-    /// Generous: covers a cold 1.4GB model read plus a ~36s ANE compile, both
-    /// of which are visible as their own splash rows while they run.
-    private let markerTimeout: TimeInterval = 90
-    /// Once the model is loaded, the test inference itself must be quick.
-    private let inferenceTimeout: TimeInterval = 15
+    /// Patience for the AUTHORITATIVE startup round-trip: a cold model read
+    /// plus a first-time ~36s ANE compile, with margin (the phases are visible
+    /// as their own splash rows while they run).
+    private let startupDeadline: TimeInterval = 120
     // Held strongly: Transcriber's completion is lost if the instance deallocates.
     private let transcriber = Transcriber()
 
@@ -102,7 +102,7 @@ class ReadinessChecker {
         set(.hotkey, .ok("double-tap key \(Config.shared.hotkeyKeycode)"))
     }
 
-    func run(recorder: AudioRecorder, hotkeyOK: Bool) {
+    func run(recorder: AudioRecorder, hotkeyOK: Bool, vad: CheckState) {
         // NOTE: CGEvent.tapCreate succeeds even WITHOUT Accessibility (the tap
         // is created but dead), so tap-creation success is NOT a valid signal.
         // Gate "hotkey armed" on actual Accessibility trust so a missing grant
@@ -116,6 +116,7 @@ class ReadinessChecker {
         set(.hotkey, (accessible && hotkeyOK)
             ? .ok("double-tap key \(Config.shared.hotkeyKeycode)")
             : .warning("needs Accessibility permission"))
+        set(.vad, vad)
         checkFiles()
         checkMic(recorder)
         startServerWatch()
@@ -195,8 +196,13 @@ class ReadinessChecker {
         }
     }
 
-    // MARK: - Server (server.log markers + inference round-trip)
+    // MARK: - Server (authoritative inference round-trip + cosmetic log markers)
 
+    /// Readiness is decided by ONE thing: a real inference round-trip, started
+    /// immediately (the Transcriber retries while the server comes up). The
+    /// server.log markers only enrich the display with phase detail ("model
+    /// loading", "ANE compiling… Ns") — a whisper.cpp log-format change can
+    /// degrade the display but can never fail a working startup.
     private func startServerWatch() {
         set(.serverModel, .running("loading…"))
         if !Config.shared.useANE {
@@ -206,28 +212,18 @@ class ReadinessChecker {
         logTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             self?.pollServerLog()
         }
+        runInferenceRoundtrip(connectDeadline: startupDeadline)
     }
 
+    /// Cosmetic phase display only — never fails anything (see startServerWatch).
     private func pollServerLog() {
-        let elapsed = ProcessInfo.processInfo.systemUptime - watchStart
-        if elapsed > markerTimeout {
-            logTimer?.invalidate()
-            if !(states[.serverModel]?.isOK ?? false) {
-                set(.serverModel, .failed("no model after \(Int(markerTimeout))s — see server.log"))
-            }
-            if Config.shared.useANE, !(states[.serverANE]?.isOK ?? false) {
-                set(.serverANE, .failed("no compile after \(Int(markerTimeout))s — see server.log"))
-            }
-            if !roundtripStarted {
-                set(.serverReady, .failed("server never came up — see server.log"))
-            }
-            return
-        }
-
         guard let log = try? String(contentsOfFile: Config.serverLogPath, encoding: .utf8) else { return }
+        let elapsed = ProcessInfo.processInfo.systemUptime - watchStart
 
         if !(states[.serverModel]?.isOK ?? false), log.contains("model size    =") {
-            set(.serverModel, .ok(String(format: "1.5 GB in %.1fs", elapsed)))
+            let bytes = (try? FileManager.default.attributesOfItem(atPath: Config.modelPath))?[.size] as? Int ?? 0
+            let size = bytes > 0 ? String(format: "%.1f GB", Double(bytes) / 1_073_741_824) : "model"
+            set(.serverModel, .ok(String(format: "%@ in %.1fs", size, elapsed)))
         }
 
         if Config.shared.useANE, !(states[.serverANE]?.isOK ?? false) {
@@ -241,15 +237,38 @@ class ReadinessChecker {
             }
         }
 
-        let aneDone = !Config.shared.useANE || (states[.serverANE]?.isOK ?? false)
-        if aneDone, !roundtripStarted {
-            roundtripStarted = true
-            runInferenceRoundtrip()
+        // Both phases displayed — nothing left to watch for.
+        if (states[.serverModel]?.isOK ?? false), (states[.serverANE]?.isOK ?? false) {
+            logTimer?.invalidate()
+            logTimer = nil
         }
     }
 
-    private func runInferenceRoundtrip() {
-        set(.serverReady, .running("test inference…"))
+    /// Post-startup engine events (AppState wires these to ServerManager):
+
+    /// The engine is reloading (settings change or crash-relaunch): gate
+    /// readiness on a fresh round-trip against the new process.
+    func recheckServer(label: String) {
+        transcriber.cancel() // supersede any round-trip already in flight
+        runInferenceRoundtrip(label: label)
+    }
+
+    /// The server crash-looped and ServerManager gave up — dictation is dead;
+    /// the failed row turns the tray red through the normal delegate chain.
+    func engineDied(_ detail: String) {
+        transcriber.cancel()
+        set(.serverReady, .failed(detail))
+    }
+
+    /// Drives the menu status line while a settings/crash reload is in flight.
+    var engineRestarting: Bool {
+        if case .running(let d)? = states[.serverReady], d.hasPrefix("engine restarting") { return true }
+        return false
+    }
+
+    private func runInferenceRoundtrip(connectDeadline: TimeInterval = 60,
+                                       label: String = "test inference…") {
+        set(.serverReady, .running(label))
         let testWav = Config.samplePath
         guard FileManager.default.fileExists(atPath: testWav) else {
             // Degraded check: no sample audio available, settle for the port.
@@ -259,27 +278,39 @@ class ReadinessChecker {
 
         let t0 = ProcessInfo.processInfo.systemUptime
 
-        // Separate deadline for the inference itself; a late success still
-        // overwrites the failure (set() recomputes readiness either way).
-        DispatchQueue.main.asyncAfter(deadline: .now() + inferenceTimeout) { [weak self] in
-            guard let self = self, !(self.states[.serverReady]?.isOK ?? false),
-                  !(self.states[.serverReady]?.isFailed ?? false) else { return }
-            self.set(.serverReady, .failed("no response after \(Int(self.inferenceTimeout))s"))
-        }
-
-        // Transcriber retries while the port comes up, so this also covers
-        // the gap between "model loaded" and "listening".
-        transcriber.transcribe(wavFile: URL(fileURLWithPath: testWav)) { [weak self] result in
+        // The Transcriber retries while the port comes up and fails on its own
+        // deadline — no separate timeout needed here.
+        transcriber.transcribe(wavFile: URL(fileURLWithPath: testWav),
+                               connectDeadline: connectDeadline) { [weak self] result in
             guard let self = self else { return }
+            if case .failure(let error) = result,
+               case Transcriber.TranscriberError.cancelled = error {
+                return // superseded by a newer recheck
+            }
             self.logTimer?.invalidate()
+            self.logTimer = nil
             let took = ProcessInfo.processInfo.systemUptime - t0
             switch result {
             case .success(let text):
+                // Round-trip proof beats missing markers: resolve any phase row
+                // the log never confirmed (e.g. upstream changed its wording).
+                if !(self.states[.serverModel]?.isOK ?? false) {
+                    self.set(.serverModel, .ok("loaded (log marker not seen)"))
+                }
+                if Config.shared.useANE, !(self.states[.serverANE]?.isOK ?? false) {
+                    self.set(.serverANE, .ok("loaded (log marker not seen)"))
+                }
                 let looksRight = text.lowercased().contains("country")
                 self.set(.serverReady, looksRight
                     ? .ok(String(format: "round-trip %.1fs", took))
                     : .failed("unexpected transcription: \(text.prefix(60))"))
             case .failure(let error):
+                if !(self.states[.serverModel]?.isOK ?? false) {
+                    self.set(.serverModel, .failed("not confirmed — see server.log"))
+                }
+                if Config.shared.useANE, !(self.states[.serverANE]?.isOK ?? false) {
+                    self.set(.serverANE, .failed("not confirmed — see server.log"))
+                }
                 self.set(.serverReady, .failed(error.localizedDescription))
             }
         }

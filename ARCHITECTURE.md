@@ -11,6 +11,17 @@ assembles the `.app` bundle, writes Info.plist, and **ad-hoc signs** it
 Gatekeeper is satisfied and ad-hoc signing is enough for TCC (mic/accessibility).
 Adding a source file means dropping it in that directory — nothing to register.
 
+**Fail-fast policy.** `--dev` compiles `-Onone -g -D DEBUG` (assertions LIVE);
+`--static` compiles `-O` (assertions stripped). Internal-invariant violations go
+through `softAssert` (Log.swift): a dev run STOPS at the breakage, an installed
+app logs `[ASSERT]` and continues on the caller's fallback. Degradations a user
+can legitimately cause (missing VAD model, edited-away marker) stay log-only.
+
+**Tests.** `build.sh` (both modes) first compiles and runs
+`tests/run-tests.swift` against the two pure text engines (`CommandProcessor`,
+`TextSplicer.smartJoin`); a failure fails the build. Add a case per lexicon or
+splicing change.
+
 - `build.sh` — compile the app (dev).
 - `run.sh` — run from the clone, foreground logs; one instance at a time (stops/relaunches the installed app so they don't fight).
 - `install.sh` — the user-facing installer (see "Install layout" below).
@@ -28,9 +39,15 @@ Adding a source file means dropping it in that directory — nothing to register
 Shoum (Swift, menu bar, LSUIElement)
 ├── main.swift          NSApplication bootstrap
 ├── AppDelegate         status item (any click → menu: status line, Status/
-│                       Settings/About, Update, Quit), tray icon state + colour,
+│                       Settings/About/Report-issue, Update, Restart Engine,
+│                       Quit), tray health
+│                       (plain = ok, yellow = degraded, red = dictation dead),
 │                       first-run permission onboarding (sequenced dialogs)
-├── UpdateChecker       notify-only: GitHub latest-commit vs stamped ShoumGitCommit
+├── UpdateChecker       notify-only: GitHub latest-commit vs stamped
+│                       ShoumGitCommit; checked at launch and daily
+├── IssueReporter       "Report an issue…": previewed, text-only diagnostics →
+│                       prefilled GitHub issue; logs OPT-IN (they contain
+│                       dictated-text excerpts); audio/prompt never included
 ├── Config              config.yaml loader + path resolution + surgical writer
 ├── Log                 leveled logger → app log file + stderr
 ├── KeyMonitor          CGEventTap on flagsChanged+keyDown; double-tap state
@@ -38,13 +55,26 @@ Shoum (Swift, menu bar, LSUIElement)
 ├── AppStateCoordinator idle → recording → processing → editing
 ├── AudioRecorder       one AVAudioEngine, prepared at launch; taps mic,
 │                       converts to 16kHz mono WAV; feeds SpectrogramView
-├── Transcriber         HTTP client → localhost whisper-server /inference
+├── Transcriber         HTTP client → localhost whisper-server /inference;
+│                       cancellable Task (ESC during 🧠 aborts mid-retry/request)
+├── RecordingArtifacts  the audio files of one dictation (raw + culled kebab)
+│                       and the single owner of when each dies (success/failure/
+│                       no-speech/cancel × keep_recordings × flag retention)
 ├── CommandProcessor    pure: spoken commands → symbols/markdown ("ascii slash"
 │                       → /, modes, casing). The lexicon IS its tables — see
 │                       lexicon.md. Applied to each chunk before smartJoin.
-├── ServerManager       owns the resident whisper-server child process
-├── ReadinessChecker    startup checklist; tails server.log markers; real test inference
-├── OverlayWindow       floating editor; 🎙️/🧠 marker; smartJoin splicing
+├── ServerManager       owns the resident whisper-server child process; caps
+│                       crash-restarts (5 rapid exits → give up, tray red)
+├── ReadinessChecker    startup checklist. AUTHORITATIVE check = a real test
+│                       inference (starts immediately; Transcriber retries while
+│                       the server loads); server.log markers are cosmetic phase
+│                       display only — a whisper.cpp log-format change can
+│                       degrade the display but never fail a working startup.
+│                       Re-runs the round-trip after engine restarts (settings/
+│                       crash) so the Status row and gating stay honest.
+├── OverlayWindow       floating editor; 🎙️/🧠 marker; splices via TextSplicer
+├── TextSplicer         pure: smartJoin fits a chunk into surrounding text
+│                       (casing/period/spacing at the seams); unit-tested
 ├── SileroSpeechDetector  the speech/silence VAD (whisper.cpp whisper_vad_*, CPU,
 │                       linked via whisper-bridge.h). classify→[Bool] for the
 │                       spectrogram colours + gauge; speechSegments→ranges for the

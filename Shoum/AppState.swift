@@ -8,7 +8,6 @@ enum ShoumState {
 }
 
 protocol AppStateDelegate: AnyObject {
-    func appStateDidChange(to state: ShoumState)
     /// User gestured before the system is ready — surface the splash.
     func appStateNeedsAttention()
 }
@@ -23,7 +22,6 @@ class AppStateCoordinator: KeyMonitorDelegate {
             // apply, so only there must single taps wait out the double-tap
             // window. Everywhere else taps fire instantly.
             keyMonitor.disambiguatesTaps = (currentState == .editing)
-            delegate?.appStateDidChange(to: currentState)
         }
     }
 
@@ -51,6 +49,15 @@ class AppStateCoordinator: KeyMonitorDelegate {
     }
 
     func start() {
+        // Post-startup engine events keep the Status row (and the tray, via the
+        // readiness delegate chain) honest: a crash-relaunch re-verifies with a
+        // round-trip; the give-up cap marks the engine dead (tray goes red).
+        serverManager.onCrashRestart = { [weak self] in
+            self?.readiness.recheckServer(label: "engine restarting after crash…")
+        }
+        serverManager.onGaveUp = { [weak self] detail in
+            self?.readiness.engineDied(detail)
+        }
         serverManager.start()
         // Only create the event tap when actually authorized. Creating it while
         // unauthorized yields a DEAD tap that churns (system disables → our
@@ -60,8 +67,17 @@ class AppStateCoordinator: KeyMonitorDelegate {
         let hotkeyOK = trusted && keyMonitor.start()
         setupEscapeKeyMonitor()
         audioRecorder.prepare()
-        readiness.run(recorder: audioRecorder, hotkeyOK: hotkeyOK)
+        readiness.run(recorder: audioRecorder, hotkeyOK: hotkeyOK, vad: vadState())
         if !trusted { pollForAccessibilityGrant() }
+    }
+
+    /// The VAD (silence-culling) health for the startup checklist: a missing
+    /// Silero model is degraded-but-usable (⚠️, raw audio sent), not a failure.
+    private func vadState() -> CheckState {
+        guard Config.shared.pruneDeadAudio else { return .ok("off (prune_dead_audio: false)") }
+        return silenceCuller.available
+            ? .ok("Silero loaded")
+            : .warning("VAD model missing — raw audio sent (no silence culling)")
     }
 
     func stop() {
@@ -119,16 +135,30 @@ class AppStateCoordinator: KeyMonitorDelegate {
     /// Apply a Settings-pane change live. Reloading Config.shared makes every
     /// in-process consumer (KeyMonitor, AppState, Transcriber) pick up the new
     /// values immediately; only an engine-affecting change needs the
-    /// whisper-server relaunched.
+    /// whisper-server relaunched — with the reload made VISIBLE: the Status row
+    /// shows "engine restarting…", readiness gates dictation until a fresh
+    /// round-trip verifies the new engine, and a failed reload goes red.
     func applySettings(engineChanged: Bool) {
         Config.reload()
-        if engineChanged { serverManager.restart() }
+        if engineChanged {
+            serverManager.restart()
+            readiness.recheckServer(label: "engine restarting…")
+        }
     }
 
     /// Let the Settings window come in front of the floating box while it's
     /// frontmost; restore floating otherwise.
     func setOverlayFloating(_ floating: Bool) {
         overlayWindow.setFloating(floating)
+    }
+
+    /// Menu-driven engine restart (Docker-style): relaunch whisper-server and
+    /// re-verify with a fresh round-trip. Also the recovery path after a
+    /// crash-loop give-up — restart() resets the give-up counter.
+    func restartEngine() {
+        Log.info("[AppState] engine restart requested (menu)")
+        serverManager.restart()
+        readiness.recheckServer(label: "engine restarting…")
     }
 
     // MARK: - KeyMonitorDelegate
@@ -150,15 +180,18 @@ class AppStateCoordinator: KeyMonitorDelegate {
         }
     }
 
-    func keyMonitorDidDetectTap() {
+    func keyMonitorDidDetectTap() -> Bool {
         Log.info("[AppState] gesture: TAP (state=\(currentState))")
         switch currentState {
         case .recording:
             stopRecordingAndTranscribe()
+            return true
         case .editing:
             confirmAndPaste()
+            return true
         case .idle, .processing:
             Log.info("[AppState] tap IGNORED (state=\(currentState))")
+            return false
         }
     }
 
@@ -173,13 +206,13 @@ class AppStateCoordinator: KeyMonitorDelegate {
 
     // MARK: - Private Methods
 
-    /// Seconds to zero at the head of each recording so the start cue (Tink) —
+    /// Seconds to zero at the head of each recording so the start cue —
     /// still ringing through the speakers when the mic arms, with no echo
     /// cancellation on the raw input — never reaches the file or the
     /// spectrogram. 100ms "clear the air" always, plus the cue's own length
     /// when sounds are enabled.
     private func startCueMuteSeconds() -> TimeInterval {
-        let cue = Config.shared.sounds ? (NSSound(named: "Tink")?.duration ?? 0.3) : 0
+        let cue = Config.shared.sounds ? (NSSound(named: Self.startCueSound)?.duration ?? 0.3) : 0
         return 0.1 + cue
     }
 
@@ -210,20 +243,15 @@ class AppStateCoordinator: KeyMonitorDelegate {
     private func stopRecordingAndTranscribe() {
         let duration = recordingStartTime.map { ProcessInfo.processInfo.systemUptime - $0 } ?? 0
         recordingStartTime = nil
-        let wavURL = audioRecorder.stopRecording()
-        Log.info("[AppState] ■ RECORDING STOPPED after \(String(format: "%.2f", duration))s (RMS \(String(format: "%.1f", audioRecorder.lastRMSdBFS)) dBFS) -> \(wavURL.lastPathComponent)")
+        let artifacts = RecordingArtifacts(raw: audioRecorder.stopRecording())
+        Log.info("[AppState] ■ RECORDING STOPPED after \(String(format: "%.2f", duration))s (RMS \(String(format: "%.1f", audioRecorder.lastRMSdBFS)) dBFS) -> \(artifacts.raw.lastPathComponent)")
 
         // Whisper hallucinates "Thank you" / "Thanks for watching" on
         // near-silence (no_speech_prob is unreliable — see tools/whisper_probe.py).
         // If the clip never rose above the speech floor, skip the round-trip and
         // treat it as empty (also saves the dead time).
         guard audioRecorder.lastRMSdBFS >= Config.shared.minSpeechDBFS else {
-            Log.info("[AppState] no speech (RMS \(String(format: "%.1f", audioRecorder.lastRMSdBFS)) < \(Config.shared.minSpeechDBFS) dBFS) — skipping whisper")
-            cleanupRecording(wavURL)
-            playSound(.subtle)
-            overlayWindow.finish(with: nil)
-            overlayWindow.show()
-            currentState = .editing
+            finishAsNoSpeech(artifacts, reason: "no speech (RMS \(String(format: "%.1f", audioRecorder.lastRMSdBFS)) < \(Config.shared.minSpeechDBFS) dBFS)")
             return
         }
 
@@ -231,26 +259,24 @@ class AppStateCoordinator: KeyMonitorDelegate {
         overlayWindow.markProcessing()
         currentState = .processing
 
-        // Off the main thread: optionally VAD-cull silence (prune_dead_audio) into
-        // a kebab, then transcribe. Culling can also reveal there's no speech at
-        // all → skip whisper. Both cull + transcribe run in the background; the
-        // transcriber completes back on main.
+        // The (CPU-bound) cull runs off-main; the transcribe call is
+        // non-blocking so it's issued from main — which also re-checks that ESC
+        // hasn't cancelled the conversion during the cull. Every completion
+        // guards on still being in .processing: after a cancel, results are
+        // dropped and the files disposed. Config is read HERE (main) so the
+        // background block never races a Settings-pane Config.reload().
+        let pruneDeadAudio = Config.shared.pruneDeadAudio
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
 
-            var sendURL = wavURL
-            var culledURL: URL?
-            if Config.shared.pruneDeadAudio {
-                switch self.silenceCuller.cull(wavURL) {
-                case .culled(let url): sendURL = url; culledURL = url
+            var artifacts = artifacts
+            if pruneDeadAudio {
+                switch self.silenceCuller.cull(artifacts.raw) {
+                case .culled(let url): artifacts.culled(to: url)
                 case .noSpeech:
                     DispatchQueue.main.async {
-                        Log.info("[AppState] VAD found no speech — skipping whisper")
-                        self.cleanupRecording(wavURL)
-                        self.playSound(.subtle)
-                        self.overlayWindow.finish(with: nil)
-                        self.overlayWindow.show()
-                        self.currentState = .editing
+                        guard self.currentState == .processing else { artifacts.discardAll(); return }
+                        self.finishAsNoSpeech(artifacts, reason: "VAD found no speech")
                     }
                     return
                 case .unavailable:
@@ -258,23 +284,41 @@ class AppStateCoordinator: KeyMonitorDelegate {
                 }
             }
 
-            self.transcriber.transcribe(wavFile: sendURL) { result in
-                switch result {
-                case .success(let text):
-                    // Retain the audio actually sent (sendURL) for possible
-                    // flagging — released when the next conversion supersedes it
-                    // (or kept 24h when keep_recordings is on). Drop the raw now,
-                    // but only when it's a distinct file from the one sent.
-                    if wavURL != sendURL { self.cleanupRecording(wavURL) }
-                    self.handleTranscriptionSuccess(
-                        text, sentAudio: sendURL, pruned: culledURL != nil, duration: duration)
-                case .failure(let error):
-                    self.cleanupRecording(wavURL)
-                    if let culledURL = culledURL { self.cleanupRecording(culledURL) }
-                    self.handleTranscriptionError(error)
+            DispatchQueue.main.async {
+                guard self.currentState == .processing else {
+                    Log.info("[AppState] cancelled during cull — dropping recording")
+                    artifacts.discardAll()
+                    return
+                }
+                self.transcriber.transcribe(wavFile: artifacts.sent) { result in
+                    guard self.currentState == .processing else {
+                        Log.info("[AppState] transcription result arrived after cancel — dropped")
+                        artifacts.discardAll()
+                        return
+                    }
+                    switch result {
+                    case .success(let text):
+                        artifacts.discardAllButSent() // sent is retained for flagging
+                        self.handleTranscriptionSuccess(
+                            text, sentAudio: artifacts.sent, pruned: artifacts.kebab != nil, duration: duration)
+                    case .failure(let error):
+                        artifacts.discardAll()
+                        self.handleTranscriptionError(error)
+                    }
                 }
             }
         }
+    }
+
+    /// Common tail for "this recording turned out to be silence" (RMS gate or
+    /// VAD): discard the audio, drop the marker, land in editing. Main thread.
+    private func finishAsNoSpeech(_ artifacts: RecordingArtifacts, reason: String) {
+        Log.info("[AppState] \(reason) — skipping whisper")
+        artifacts.discardAll()
+        playSound(.subtle)
+        overlayWindow.finish(with: nil)
+        overlayWindow.show()
+        currentState = .editing
     }
 
     private func handleTranscriptionSuccess(
@@ -289,13 +333,11 @@ class AppStateCoordinator: KeyMonitorDelegate {
         // The 🧠 marker becomes the transcribed text. The clipboard is left
         // untouched until the user confirms (single-tap) so dictating never
         // clobbers what they had copied; confirmAndPaste borrows it then restores.
-        overlayWindow.finish(with: chunk)
+        // `finish` returns the smartJoin I/O it performed — captured for the flag
+        // feature. Held until the next conversion supersedes it, so it's
+        // flaggable even after paste.
+        let splice = overlayWindow.finish(with: chunk)
         overlayWindow.showWhisperResponse(Config.shared.showWhisperResponse ? text : nil)
-
-        // Capture this conversion for the flag feature: the exact audio sent to
-        // the engine plus the smartJoin I/O `finish` just produced. Held until
-        // the next conversion supersedes it, so it's flaggable even after paste.
-        let splice = overlayWindow.lastSplice
         setLastInteraction(LastInteraction(
             kebabURL: sentAudio,
             pruned: pruned,
@@ -325,11 +367,10 @@ class AppStateCoordinator: KeyMonitorDelegate {
     }
 
     /// The superseded interaction's sent audio was retained only for flagging;
-    /// once it's replaced, let keep_recordings decide its fate — the retained dir
-    /// prunes at 24h, so we only need to act when keep_recordings is off.
+    /// once it's replaced, dispose it (RecordingArtifacts.dispose applies the
+    /// keep_recordings rule).
     private func releaseRetainedAudio(_ interaction: LastInteraction) {
-        guard !Config.shared.keepRecordings else { return }
-        try? FileManager.default.removeItem(at: interaction.kebabURL)
+        RecordingArtifacts.dispose(interaction.kebabURL)
     }
 
     /// Persist the last conversion as a flagged incident (menu action). Returns
@@ -343,6 +384,12 @@ class AppStateCoordinator: KeyMonitorDelegate {
     }
 
     private func handleTranscriptionError(_ error: Error) {
+        if case Transcriber.TranscriberError.cancelled = error {
+            // ESC already unwound the state synchronously (cancelProcessing);
+            // normally the stale-result guard filters this — kept for safety.
+            Log.info("[AppState] transcription cancelled")
+            return
+        }
         Log.error("[AppState] transcription FAILED: \(error.localizedDescription)")
         overlayWindow.finish(with: nil)
         if case Transcriber.TranscriberError.emptyTranscription = error {
@@ -410,8 +457,7 @@ class AppStateCoordinator: KeyMonitorDelegate {
     /// in editing — so a second ESC then closes the box.
     private func cancelRecording() {
         recordingStartTime = nil
-        let wavURL = audioRecorder.stopRecording()
-        cleanupRecording(wavURL)
+        RecordingArtifacts.dispose(audioRecorder.stopRecording())
         Log.info("[AppState] recording cancelled (escape)")
         playSound(.subtle)
         overlayWindow.finish(with: nil) // removes the marker, restores any selection
@@ -423,8 +469,7 @@ class AppStateCoordinator: KeyMonitorDelegate {
     /// (straight to idle) instead of landing in an empty editor.
     private func cancelRecordingAndClose() {
         recordingStartTime = nil
-        let wavURL = audioRecorder.stopRecording()
-        cleanupRecording(wavURL)
+        RecordingArtifacts.dispose(audioRecorder.stopRecording())
         Log.info("[AppState] recording cancelled + box closed (escape on empty box)")
         playSound(.subtle)
         overlayWindow.hide()
@@ -432,11 +477,22 @@ class AppStateCoordinator: KeyMonitorDelegate {
         currentState = .idle
     }
 
-    /// Recordings are retained (for post-hoc debugging of misfires) unless
-    /// keep_recordings is off; AudioRecorder prunes the 24h-old ones at launch.
-    private func cleanupRecording(_ url: URL) {
-        guard !Config.shared.keepRecordings else { return }
-        try? FileManager.default.removeItem(at: url)
+    /// ESC while transcribing (🧠): abandon the in-flight conversion. Same
+    /// semantics as ESC-while-recording — the 🧠 marker vanishes, text already
+    /// in the box is kept (editing), and an empty box closes outright. The
+    /// pipeline's stale-result guards dispose the audio files.
+    private func cancelProcessing() {
+        Log.info("[AppState] transcription cancelled (escape)")
+        transcriber.cancel()
+        playSound(.subtle)
+        overlayWindow.finish(with: nil) // removes the 🧠 marker, restores any selection
+        if overlayWindow.getText().trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            overlayWindow.hide()
+            clipboardManager.refocusRememberedApp()
+            currentState = .idle
+        } else {
+            currentState = .editing
+        }
     }
 
     private func setupEscapeKeyMonitor() {
@@ -455,16 +511,17 @@ class AppStateCoordinator: KeyMonitorDelegate {
                     }
                     return nil
                 }
+                if self.currentState == .processing {
+                    self.cancelProcessing() // abandon the in-flight transcription
+                    return nil
+                }
                 if self.currentState == .editing {
                     self.dismiss() // ESC with no active recording: close the box
                     return nil
                 }
             }
 
-            // Undo/redo (⌘Z / ⌘⇧Z) and Cut/Copy/Paste/Select All/Emoji are now
-            // handled natively by the app's Edit menu (AppDelegate.setupMainMenu),
-            // which routes the standard key equivalents to the text view through
-            // the responder chain — no manual interception needed here.
+            // ⌘Z/⌘C/etc. dispatch via the Edit menu (AppDelegate.setupMainMenu).
             return event
         }
     }
@@ -486,12 +543,16 @@ class AppStateCoordinator: KeyMonitorDelegate {
         case error
     }
 
+    /// The start cue — also measured by startCueMuteSeconds to size the head
+    /// mute, so the two must stay the same sound.
+    private static let startCueSound = NSSound.Name("Tink")
+
     private func playSound(_ type: SoundType) {
         guard Config.shared.sounds else { return }
         let soundName: NSSound.Name
         switch type {
         case .start:
-            soundName = NSSound.Name("Tink")
+            soundName = Self.startCueSound
         case .stop:
             soundName = NSSound.Name("Pop")
         case .success:

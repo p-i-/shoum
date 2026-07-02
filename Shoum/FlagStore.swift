@@ -9,7 +9,7 @@ import Foundation
 ///   • engine (audio → text): re-POST `kebabURL` (exactly what whisper saw) to
 ///     replay the transcription;
 ///   • post-processing (text → box): `boxBefore` / `replaced` / `chunk` /
-///     `boxAfter` fully reproduce `OverlayWindow.smartJoin`.
+///     `boxAfter` fully reproduce `TextSplicer.smartJoin`.
 struct LastInteraction {
     /// The audio actually sent to the engine — the silence-culled "kebab" when
     /// `prune_dead_audio` ran, else the raw recording. This is the file copied

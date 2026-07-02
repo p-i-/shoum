@@ -1,45 +1,62 @@
 import Foundation
 
 /// Sends recorded WAV files to the resident whisper-server over localhost.
+/// Each transcription runs as a cancellable `Task`: `cancel()` aborts the retry
+/// loop and any in-flight request immediately (ESC during 🧠). The completion
+/// still fires — promptly, with `.cancelled` — so callers keep one unwinding
+/// path.
 class Transcriber {
     // Derived from Config.shared so a live port change applies without recreating.
     private var inferenceURL: URL { URL(string: "http://127.0.0.1:\(Config.shared.serverPort)/inference")! }
 
-    /// How long to keep retrying while the server is still starting up.
-    /// Cold CoreML model load under system load has been observed at ~26s.
-    private let connectDeadline: TimeInterval = 60
+    /// Default patience while the server comes up (a settings-change model
+    /// reload is ~15–30 s under load). Callers can extend it — startup passes a
+    /// longer deadline to cover a cold load plus a first-time ANE compile.
+    private let defaultConnectDeadline: TimeInterval = 60
     private let retryInterval: TimeInterval = 0.4
 
-    func transcribe(wavFile: URL, completion: @escaping (Result<String, Error>) -> Void) {
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self = self else { return }
+    private var currentTask: Task<Void, Never>?
 
-            let result = self.transcribeWithRetry(wavFile: wavFile)
-            DispatchQueue.main.async {
-                completion(result)
-            }
+    func transcribe(wavFile: URL, connectDeadline: TimeInterval? = nil,
+                    completion: @escaping (Result<String, Error>) -> Void) {
+        let deadline = connectDeadline ?? defaultConnectDeadline
+        currentTask = Task {
+            let result = await self.transcribeWithRetry(wavFile: wavFile, connectDeadline: deadline)
+            DispatchQueue.main.async { completion(result) }
         }
     }
 
-    private func transcribeWithRetry(wavFile: URL) -> Result<String, Error> {
+    /// Abort the in-flight transcription (both the retry loop and a live
+    /// request — URLSession responds to task cancellation immediately).
+    func cancel() {
+        currentTask?.cancel()
+    }
+
+    private func transcribeWithRetry(wavFile: URL, connectDeadline: TimeInterval) async -> Result<String, Error> {
         let deadline = Date().addingTimeInterval(connectDeadline)
         var attempt = 0
 
         while true {
+            if Task.isCancelled { return .failure(TranscriberError.cancelled) }
             attempt += 1
-            let result = performRequest(wavFile: wavFile)
+            let result = await performRequest(wavFile: wavFile)
 
-            // Retry only connection failures (server still loading the model);
-            // anything else is a real error.
-            if case .failure(let error) = result,
-               let urlError = error as? URLError,
-               urlError.code == .cannotConnectToHost || urlError.code == .networkConnectionLost,
-               Date() < deadline {
-                if attempt == 1 || attempt % 5 == 0 {
-                    Log.info("[Transcriber] server not reachable (attempt \(attempt)), retrying for up to \(String(format: "%.0f", deadline.timeIntervalSinceNow))s more")
+            if case .failure(let error) = result {
+                if error is CancellationError || (error as? URLError)?.code == .cancelled {
+                    return .failure(TranscriberError.cancelled)
                 }
-                Thread.sleep(forTimeInterval: retryInterval)
-                continue
+                // Retry only connection failures (server still loading the
+                // model); anything else is a real error.
+                if let urlError = error as? URLError,
+                   urlError.code == .cannotConnectToHost || urlError.code == .networkConnectionLost,
+                   Date() < deadline {
+                    if attempt == 1 || attempt % 5 == 0 {
+                        Log.info("[Transcriber] server not reachable (attempt \(attempt)), retrying for up to \(String(format: "%.0f", deadline.timeIntervalSinceNow))s more")
+                    }
+                    do { try await Task.sleep(nanoseconds: UInt64(retryInterval * 1_000_000_000)) }
+                    catch { return .failure(TranscriberError.cancelled) }
+                    continue
+                }
             }
 
             if attempt > 1 {
@@ -49,7 +66,7 @@ class Transcriber {
         }
     }
 
-    private func performRequest(wavFile: URL) -> Result<String, Error> {
+    private func performRequest(wavFile: URL) async -> Result<String, Error> {
         guard let wavData = try? Data(contentsOf: wavFile) else {
             return .failure(TranscriberError.serverError("Could not read recording: \(wavFile.path)"))
         }
@@ -79,45 +96,32 @@ class Transcriber {
         body.append("--\(boundary)--\r\n".data(using: .utf8)!)
         request.httpBody = body
 
-        let semaphore = DispatchSemaphore(value: 0)
-        var result: Result<String, Error> = .failure(TranscriberError.serverError("No response"))
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
 
-        let task = URLSession.shared.dataTask(with: request) { data, response, error in
-            defer { semaphore.signal() }
-
-            if let error = error {
-                result = .failure(error)
-                return
-            }
-
-            guard let http = response as? HTTPURLResponse, let data = data else {
-                result = .failure(TranscriberError.serverError("Invalid response from whisper-server"))
-                return
+            guard let http = response as? HTTPURLResponse else {
+                return .failure(TranscriberError.serverError("Invalid response from whisper-server"))
             }
 
             let text = String(data: data, encoding: .utf8) ?? ""
 
             guard http.statusCode == 200 else {
-                result = .failure(TranscriberError.serverError("Server returned \(http.statusCode): \(text)"))
-                return
+                return .failure(TranscriberError.serverError("Server returned \(http.statusCode): \(text)"))
             }
 
             // whisper-server reports some failures as HTTP 200 with an error
             // JSON body — don't let those through as transcribed text.
             if text.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("{\"error\"") {
-                result = .failure(TranscriberError.serverError(text))
-                return
+                return .failure(TranscriberError.serverError(text))
             }
 
             let cleaned = Self.cleanTranscription(text)
-            result = cleaned.isEmpty
+            return cleaned.isEmpty
                 ? .failure(TranscriberError.emptyTranscription)
                 : .success(cleaned)
+        } catch {
+            return .failure(error)
         }
-        task.resume()
-        semaphore.wait()
-
-        return result
     }
 
     /// Trim whitespace and drop non-speech annotations like [BLANK_AUDIO] or
@@ -152,6 +156,7 @@ class Transcriber {
     enum TranscriberError: LocalizedError {
         case emptyTranscription
         case serverError(String)
+        case cancelled
 
         var errorDescription: String? {
             switch self {
@@ -159,6 +164,8 @@ class Transcriber {
                 return "No speech detected in recording"
             case .serverError(let message):
                 return "Transcription failed: \(message)"
+            case .cancelled:
+                return "Transcription cancelled"
             }
         }
     }

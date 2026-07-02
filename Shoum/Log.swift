@@ -34,10 +34,19 @@ enum Log {
     private static let queue = DispatchQueue(label: "shoum.log")
     private static let stderrHandle = FileHandle.standardError
 
-    /// Opened once, truncating, on first emit — one fresh log file per launch.
+    /// Opened once on first emit — one fresh log file per launch. The previous
+    /// session's log is ROTATED to <path>.1 (not truncated in place): it may hold
+    /// a crash report CrashReporter appended after our last write, and wiping it
+    /// on relaunch would destroy exactly the evidence it exists to preserve.
     private static let fileHandle: FileHandle? = {
         let path = Config.appLogPath
-        FileManager.default.createFile(atPath: path, contents: nil)
+        let fm = FileManager.default
+        if fm.fileExists(atPath: path) {
+            let prev = path + ".1"
+            try? fm.removeItem(atPath: prev)
+            try? fm.moveItem(atPath: path, toPath: prev)
+        }
+        fm.createFile(atPath: path, contents: nil)
         return FileHandle(forWritingAtPath: path)
     }()
 
@@ -61,5 +70,19 @@ enum Log {
             stderrHandle.write(data)
             fileHandle?.write(data)
         }
+    }
+}
+
+/// Fail fast in dev, log-and-degrade in production. `assertionFailure` is active
+/// in a `--dev` build (-Onone) and compiled out of `--static` (-O), so a broken
+/// internal invariant STOPS a dev run at the point of breakage while an installed
+/// app logs it and carries on with the caller's fallback.
+func softAssert(_ condition: @autoclosure () -> Bool,
+                _ message: @autoclosure () -> String,
+                file: StaticString = #fileID, line: UInt = #line) {
+    if !condition() {
+        let msg = message()
+        Log.error("[ASSERT] \(msg) (\(file):\(line))")
+        assertionFailure(msg, file: file, line: line)
     }
 }

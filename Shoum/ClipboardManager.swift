@@ -71,12 +71,15 @@ class ClipboardManager {
     func pasteToRememberedApp(_ text: String, restoreClipboardAfter: Bool = false) {
         // The clipboard still holds the user's own content at this point; snapshot
         // it before we overwrite it with our payload so we can hand it back once
-        // the paste has landed.
-        if restoreClipboardAfter { saveClipboard() }
+        // the paste has landed. If a restore is already pending (a second paste
+        // within its 1s window), the existing snapshot is the user's real
+        // clipboard — snapshotting again would capture OUR previous payload and
+        // lose theirs.
+        if restoreClipboardAfter, !didSave { saveClipboard() }
         copyToClipboard(text)
 
         guard let app = rememberedApp else {
-            print("No remembered app to paste to")
+            Log.error("[Clipboard] no remembered app to paste to")
             return
         }
 
@@ -107,7 +110,7 @@ class ClipboardManager {
     /// target keeps up. No clipboard means no race and no clobber.
     func typeToRememberedApp(_ text: String) {
         guard let app = rememberedApp else {
-            print("No remembered app to type into")
+            Log.error("[Clipboard] no remembered app to type into")
             return
         }
         app.activate(options: [])

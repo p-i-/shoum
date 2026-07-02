@@ -18,15 +18,17 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
     private let statusLine = NSTextField(labelWithString: "Starting up…")
     private var bottomRow: NSStackView!
 
-    // Settings controls (read on Save).
-    private let modelField = NSTextField()
+    // Settings controls (read on apply).
+    private let modelPopup = NSPopUpButton()   // installed models only — a model can't be mistyped
     private let modelDirField = NSTextField()
     private let useANECheckbox = NSButton(checkboxWithTitle: "Use Neural Engine (CoreML)", target: nil, action: nil)
     private let portField = NSTextField()
+    private let serverArgsField = NSTextField()
     private let logLevelPopup = NSPopUpButton()
     private let doubleTapField = NSTextField()
     private let tapMaxField = NSTextField()
     private let holdReleaseField = NSTextField()
+    private let minSpeechField = NSTextField()
     private let hotkeyPopup = NSPopUpButton()
     private let soundsCheckbox = NSButton(checkboxWithTitle: "Sound feedback", target: nil, action: nil)
     private let pruneCheckbox = NSButton(checkboxWithTitle: "Prune dead audio (VAD removes silence before transcribing)", target: nil, action: nil)
@@ -35,6 +37,8 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
     private let restoreClipboardCheckbox = NSButton(checkboxWithTitle: "Restore clipboard after pasting", target: nil, action: nil)
     private let voiceCommandsCheckbox = NSButton(checkboxWithTitle: "Voice commands (speak symbols & markdown — see lexicon.md)", target: nil, action: nil)
     private let showWhisperCheckbox = NSButton(checkboxWithTitle: "Show last whisper response (debug — green pane in the box)", target: nil, action: nil)
+    private let keepRecordingsCheckbox = NSButton(checkboxWithTitle: "Keep recordings 24h (/tmp/shoum/wavs — debugging)", target: nil, action: nil)
+    private let checkUpdatesCheckbox = NSButton(checkboxWithTitle: "Check for updates (daily, notify-only)", target: nil, action: nil)
     private let loginCheckbox = NSButton(checkboxWithTitle: "Start at login", target: nil, action: nil)
     private let promptTextView = NSTextView()
     private let settingsStatus = NSTextField(labelWithString: "")
@@ -144,7 +148,7 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
           • single tap while recording — stop & transcribe
           • double-tap and hold — push-to-talk (release stops)
           • single tap while editing — paste into the previous app
-          • Esc — cancel recording, then close the box
+          • Esc — cancel recording/transcribing, then close the box
           • ⌘Z / ⌘⇧Z — undo / redo a dictated chunk
         """)
         gestures.font = .systemFont(ofSize: 11.5)
@@ -192,20 +196,25 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
 
         let cfg = Config.shared
 
-        modelField.stringValue = cfg.model
+        populateModelPopup()
         modelDirField.stringValue = cfg.modelDir
         modelDirField.placeholderString = "shared default (\(Config.canonicalModelStore))"
         useANECheckbox.state = cfg.useANE ? .on : .off
         portField.stringValue = String(cfg.serverPort)
+        serverArgsField.stringValue = cfg.serverArgs
+        serverArgsField.placeholderString = "extra whisper-server flags, e.g. -t 6"
         soundsCheckbox.state = cfg.sounds ? .on : .off
         pruneCheckbox.state = cfg.pruneDeadAudio ? .on : .off
         typeIntoTerminalsCheckbox.state = cfg.typeIntoTerminals ? .on : .off
         restoreClipboardCheckbox.state = cfg.restoreClipboard ? .on : .off
         voiceCommandsCheckbox.state = cfg.voiceCommands ? .on : .off
         showWhisperCheckbox.state = cfg.showWhisperResponse ? .on : .off
+        keepRecordingsCheckbox.state = cfg.keepRecordings ? .on : .off
+        checkUpdatesCheckbox.state = cfg.checkForUpdates ? .on : .off
         doubleTapField.stringValue = String(cfg.doubleTapWindowMs)
         tapMaxField.stringValue = String(cfg.tapMaxMs)
         holdReleaseField.stringValue = String(cfg.holdReleaseMs)
+        minSpeechField.stringValue = String(cfg.minSpeechDBFS)
 
         logLevelPopup.addItems(withTitles: ["error", "info", "debug"])
         logLevelPopup.selectItem(withTitle: cfg.logLevel)
@@ -219,29 +228,32 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
         hotkeyPopup.lastItem?.tag = 60
         hotkeyPopup.selectItem(withTag: cfg.hotkeyKeycode)
 
-        for f in [modelField, modelDirField, portField, doubleTapField, tapMaxField, holdReleaseField] {
+        for f in [modelDirField, portField, serverArgsField, doubleTapField,
+                  tapMaxField, holdReleaseField, minSpeechField] {
             f.translatesAutoresizingMaskIntoConstraints = false
             f.widthAnchor.constraint(equalToConstant: 240).isActive = true
             f.delegate = self // commit (Enter/blur) → applySettings
         }
         // Dirty-tracking on the non-text controls (login is applied instantly, not saved).
-        for popup in [logLevelPopup, pasteModePopup, hotkeyPopup] {
+        for popup in [modelPopup, logLevelPopup, pasteModePopup, hotkeyPopup] {
             popup.target = self; popup.action = #selector(settingChanged)
         }
         for box in [useANECheckbox, soundsCheckbox, pruneCheckbox,
                     typeIntoTerminalsCheckbox, restoreClipboardCheckbox, voiceCommandsCheckbox,
-                    showWhisperCheckbox] {
+                    showWhisperCheckbox, keepRecordingsCheckbox, checkUpdatesCheckbox] {
             box.target = self; box.action = #selector(settingChanged)
         }
 
-        stack.addArrangedSubview(formRow("Model", modelField))
+        stack.addArrangedSubview(formRow("Model", modelPopup))
         stack.addArrangedSubview(formRow("Model dir", modelDirField))
         stack.addArrangedSubview(useANECheckbox)
         stack.addArrangedSubview(formRow("Server port", portField))
+        stack.addArrangedSubview(formRow("Extra server args", serverArgsField))
         stack.addArrangedSubview(formRow("Log level", logLevelPopup))
         stack.addArrangedSubview(formRow("Double-tap window (ms)", doubleTapField))
         stack.addArrangedSubview(formRow("Tap max (ms)", tapMaxField))
         stack.addArrangedSubview(formRow("Hold-release (ms)", holdReleaseField))
+        stack.addArrangedSubview(formRow("No-speech floor (dBFS)", minSpeechField))
         stack.addArrangedSubview(formRow("Hotkey", hotkeyPopup))
         stack.addArrangedSubview(formRow("Paste mode", pasteModePopup))
         stack.addArrangedSubview(typeIntoTerminalsCheckbox)
@@ -250,6 +262,8 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
         stack.addArrangedSubview(showWhisperCheckbox)
         stack.addArrangedSubview(soundsCheckbox)
         stack.addArrangedSubview(pruneCheckbox)
+        stack.addArrangedSubview(keepRecordingsCheckbox)
+        stack.addArrangedSubview(checkUpdatesCheckbox)
 
         // Start at login — only meaningful for an installed app (registering the
         // dev build's path would point the login item at the clone).
@@ -287,6 +301,27 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
         hintRow.orientation = .horizontal
 
         return wrapInTab(stack, bottom: hintRow)
+    }
+
+    /// Fill the model dropdown with the models actually present on disk
+    /// (Config.availableModels) — selection instead of free text, so a typo'd
+    /// model can't silently kill the engine. The configured model stays
+    /// selectable even if its file has gone missing (marked so).
+    private func populateModelPopup() {
+        let current = Config.shared.model
+        let installed = Config.availableModels
+        var names = installed
+        if !names.contains(current) { names.append(current) }
+
+        modelPopup.removeAllItems()
+        for name in names.sorted() {
+            let missing = !installed.contains(name)
+            modelPopup.addItem(withTitle: missing ? "\(name) (missing)" : name)
+            modelPopup.lastItem?.representedObject = name
+        }
+        if let idx = modelPopup.itemArray.firstIndex(where: { ($0.representedObject as? String) == current }) {
+            modelPopup.selectItem(at: idx)
+        }
     }
 
     private func configureLoginCheckbox() {
@@ -508,7 +543,10 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
     /// presents frontmost) isn't buried behind our window. Manual shows (tray
     /// click) activate normally.
     func show(activate: Bool = true) {
-        panel.center()
+        // Center only on first appearance — re-centering an already-visible (or
+        // user-positioned) window discards where they put it.
+        if !panel.isVisible { panel.center() }
+        populateModelPopup() // models staged since launch appear without a relaunch
         if activate {
             panel.makeKeyAndOrderFront(nil)
             // orderFrontRegardless brings the window above OTHER apps' windows
@@ -562,9 +600,10 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
         statusLine.stringValue = "Problems found — fix the ❌ items below"
     }
 
-    /// No hard failures, but something needs the user (e.g. a permission grant).
+    /// No hard failures, but something needs the user (a permission grant, a
+    /// missing VAD model, …).
     func markWarning() {
-        statusLine.stringValue = "Action needed — grant the ⚠️ items below"
+        statusLine.stringValue = "Action needed — see the ⚠️ items below"
     }
 
     // MARK: - Actions
@@ -615,14 +654,16 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
     private func configValues() -> [String: String] {
         func t(_ f: NSTextField) -> String { f.stringValue.trimmingCharacters(in: .whitespaces) }
         return [
-            "model": t(modelField),
+            "model": (modelPopup.selectedItem?.representedObject as? String) ?? Config.shared.model,
             "model_dir": t(modelDirField),
             "use_ane": useANECheckbox.state == .on ? "true" : "false",
             "server_port": t(portField),
+            "server_args": t(serverArgsField),
             "log_level": logLevelPopup.titleOfSelectedItem ?? "info",
             "double_tap_window_ms": t(doubleTapField),
             "tap_max_ms": t(tapMaxField),
             "hold_release_ms": t(holdReleaseField),
+            "min_speech_dbfs": t(minSpeechField),
             "hotkey_keycode": String(hotkeyPopup.selectedItem?.tag ?? 56),
             "sounds": soundsCheckbox.state == .on ? "true" : "false",
             "prune_dead_audio": pruneCheckbox.state == .on ? "true" : "false",
@@ -631,6 +672,8 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
             "restore_clipboard": restoreClipboardCheckbox.state == .on ? "true" : "false",
             "voice_commands": voiceCommandsCheckbox.state == .on ? "true" : "false",
             "show_whisper_response": showWhisperCheckbox.state == .on ? "true" : "false",
+            "keep_recordings": keepRecordingsCheckbox.state == .on ? "true" : "false",
+            "check_for_updates": checkUpdatesCheckbox.state == .on ? "true" : "false",
         ]
     }
 
@@ -654,12 +697,9 @@ class SplashWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTextViewD
             catch { Log.error("[Settings] failed to write prompt.txt: \(error)") }
         }
 
-        // Only an engine-affecting change needs the whisper-server relaunched.
-        let engineChanged = values["model"] != old.model
-            || values["model_dir"] != old.modelDir
-            || (values["use_ane"] == "true") != old.useANE
-            || values["server_port"] != String(old.serverPort)
-            || promptChanged
+        // Only an engine-affecting change needs the whisper-server relaunched —
+        // which keys those are is the registry's knowledge, not this pane's.
+        let engineChanged = Config.engineAffecting(values, comparedTo: old) || promptChanged
 
         onApply?(engineChanged) // reloads Config.shared (light settings live now)
         baselinePrompt = newPrompt

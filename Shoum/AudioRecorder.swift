@@ -244,13 +244,20 @@ class AudioRecorder {
         let rms = rmsSampleCount > 0 ? (sumSquares / Double(rmsSampleCount)).squareRoot() : 0
         lastRMSdBFS = rms > 0 ? 20 * log10(rms) : -120
 
-        if let url = recordingURL,
-           let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int {
+        // Stop without a start is a state-machine bug upstream — fail fast in
+        // dev; in release return a placeholder that fails visibly downstream.
+        guard let url = recordingURL else {
+            softAssert(false, "[AudioRecorder] stopRecording called with no recording in progress")
+            return URL(fileURLWithPath: "/tmp/error.wav")
+        }
+        recordingURL = nil // consumed; a double-stop now trips the assert above
+
+        if let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int {
             Log.info("[AudioRecorder] Recorded \(size) bytes (RMS \(String(format: "%.1f", lastRMSdBFS)) dBFS) to \(url.lastPathComponent)")
         }
 
         pruneOldRecordings()
-        return recordingURL ?? URL(fileURLWithPath: "/tmp/error.wav")
+        return url
     }
 
     enum RecorderError: Error {

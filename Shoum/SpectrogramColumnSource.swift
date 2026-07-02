@@ -5,7 +5,8 @@ import Foundation
 /// absolute dBFS → viridis (speech) / grey (silence) RGBA column, with a green box
 /// around each speech run. Pure DSP, no UI. Runs on the caller's serial queue.
 ///
-/// Speech/silence comes from a `SpeechDetector` (Silero, energy fallback) run in
+/// Speech/silence comes from a `SileroSpeechDetector` (no fallback — nil detector
+/// renders everything grey) run in
 /// a BATCH/TICK model: incoming samples are buffered (`push16k`), and on each
 /// `tick` we re-classify a bounded rolling `[emitted-warmup … now]` window and
 /// emit the freshly-classified columns. The window is bounded by how far emission

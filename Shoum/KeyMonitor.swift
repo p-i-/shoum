@@ -5,7 +5,12 @@ protocol KeyMonitorDelegate: AnyObject {
     /// Double-tap on left shift — engage recording.
     func keyMonitorDidDetectDoubleTap()
     /// Clean single tap on left shift — stop recording / confirm paste.
-    func keyMonitorDidDetectTap()
+    /// Return true if the tap TRIGGERED an action: an actioned tap must not
+    /// also count as the first tap of a double-tap (a stop-tap followed by an
+    /// ordinary shift press within the window would phantom-start a recording).
+    /// Return false when the tap was ignored (idle) — an ignored tap stays
+    /// eligible to pair up, which is exactly how dictation starts from idle.
+    func keyMonitorDidDetectTap() -> Bool
     /// Release after a double-tap-and-hold — push-to-talk style stop.
     func keyMonitorDidDetectHoldRelease()
 }
@@ -40,6 +45,13 @@ class KeyMonitor {
     private var lastTapReleaseTime: TimeInterval?
     private var pendingTapTimer: Timer?
     private var engagedByThisPress = false
+    /// Logged on each double-tap: whether its first tap had already fired as an
+    /// immediate tap (only an IGNORED immediate tap may chain — see delegate doc).
+    private var lastTapFiredImmediately = false
+    /// Hardware timestamp of the newest flagsChanged event (ANY keycode) we've
+    /// processed — compared against the HID system's own record to detect
+    /// events still queued behind a busy main thread (see confirmPendingSingleTap).
+    private var lastSeenFlagsChangedTime: TimeInterval = 0
 
     // Derived from Config.shared each read (single source of truth) so a live
     // config reload applies with no caching/invalidation.
@@ -131,6 +143,12 @@ class KeyMonitor {
             CFRunLoopRemoveSource(CFRunLoopGetCurrent(), source, .commonModes)
         }
 
+        // Invalidate the mach port too — disabling alone leaks it across the
+        // stop/re-arm cycle the Accessibility grant flow performs.
+        if let tap = eventTap {
+            CFMachPortInvalidate(tap)
+        }
+
         eventTap = nil
         runLoopSource = nil
     }
@@ -156,15 +174,18 @@ class KeyMonitor {
         }
 
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
-        guard keyCode == hotkeyKeyCode else {
-            return Unmanaged.passUnretained(event)
-        }
-
         let shiftPressed = event.flags.contains(.maskShift)
         let hardwareTime = Self.eventTime(event)
+        let isHotkey = keyCode == hotkeyKeyCode
 
+        // Every flagsChanged (any keycode) advances lastSeenFlagsChangedTime on
+        // the same serialized main hop as gesture processing, so the pending-
+        // single-tap confirm can tell "processed everything" from "events still
+        // queued".
         DispatchQueue.main.async { [weak self] in
-            self?.processShiftState(isPressed: shiftPressed, at: hardwareTime)
+            guard let self = self else { return }
+            self.lastSeenFlagsChangedTime = max(self.lastSeenFlagsChangedTime, hardwareTime)
+            if isHotkey { self.processShiftState(isPressed: shiftPressed, at: hardwareTime) }
         }
 
         return Unmanaged.passUnretained(event)
@@ -200,7 +221,7 @@ class KeyMonitor {
                 pendingTapTimer = nil
                 lastTapReleaseTime = nil
                 engagedByThisPress = true
-                Log.debug("[KeyMonitor] double-tap (gap \(String(format: "%.0f", (now - lastRelease) * 1000))ms) -> engage")
+                Log.debug("[KeyMonitor] double-tap (gap \(String(format: "%.0f", (now - lastRelease) * 1000))ms, first tap \(lastTapFiredImmediately ? "ALREADY FIRED as immediate tap" : "was pending")) -> engage")
                 delegate?.keyMonitorDidDetectDoubleTap()
             }
         } else {
@@ -235,18 +256,51 @@ class KeyMonitor {
             lastTapReleaseTime = now
 
             if disambiguatesTaps {
+                lastTapFiredImmediately = false
                 Log.debug("[KeyMonitor] tap (\(String(format: "%.0f", duration * 1000))ms), waiting \(String(format: "%.0f", doubleTapWindow * 1000))ms to rule out double-tap")
                 pendingTapTimer?.invalidate()
                 pendingTapTimer = Timer.scheduledTimer(withTimeInterval: doubleTapWindow, repeats: false) { [weak self] _ in
                     self?.pendingTapTimer = nil
-                    self?.lastTapReleaseTime = nil
-                    Log.debug("[KeyMonitor] single tap confirmed")
-                    self?.delegate?.keyMonitorDidDetectTap()
+                    self?.confirmPendingSingleTap(defersLeft: 4)
                 }
             } else {
+                lastTapFiredImmediately = true
                 Log.debug("[KeyMonitor] tap (\(String(format: "%.0f", duration * 1000))ms) -> immediate")
-                delegate?.keyMonitorDidDetectTap()
+                let actioned = delegate?.keyMonitorDidDetectTap() ?? false
+                if actioned {
+                    // An actioned tap must not double as the first tap of a
+                    // double-tap (see the delegate doc); an ignored one stays
+                    // eligible — that's how idle's double-tap forms.
+                    lastTapReleaseTime = nil
+                }
             }
         }
+    }
+
+    /// The wall-clock disambiguation timer has expired — but the double-tap
+    /// window is judged in HARDWARE time, and under main-thread lag a second
+    /// press that is physically inside the window can still be queued behind
+    /// us. Before declaring a single tap, ask the HID system whether a
+    /// flagsChanged newer than anything we've processed exists; if so, defer
+    /// briefly so the queued event runs first (if it's the double-tap press,
+    /// it invalidates this pending confirm). Bounded: unrelated modifier
+    /// activity can cost a few 50 ms defers, never a livelock.
+    private func confirmPendingSingleTap(defersLeft: Int) {
+        guard let release = lastTapReleaseTime else { return } // already consumed
+        let now = ProcessInfo.processInfo.systemUptime
+        let newestPhysical = now - CGEventSource.secondsSinceLastEventType(
+            .hidSystemState, eventType: .flagsChanged)
+        let newestProcessed = max(lastSeenFlagsChangedTime, release)
+        if defersLeft > 0, newestPhysical > newestProcessed + 0.005 {
+            Log.debug("[KeyMonitor] single-tap verdict deferred \(String(format: "%.0f", (newestPhysical - newestProcessed) * 1000))ms — an unprocessed flagsChanged is in flight")
+            pendingTapTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: false) { [weak self] _ in
+                self?.pendingTapTimer = nil
+                self?.confirmPendingSingleTap(defersLeft: defersLeft - 1)
+            }
+            return
+        }
+        lastTapReleaseTime = nil
+        Log.debug("[KeyMonitor] single tap confirmed")
+        _ = delegate?.keyMonitorDidDetectTap()
     }
 }

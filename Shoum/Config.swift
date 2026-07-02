@@ -42,15 +42,85 @@ struct Config {
     var pruneDeadAudio = true // VAD-cull silence before sending to whisper (kebab)
     var checkForUpdates = true // query GitHub on launch to notify of a newer build
 
-    /// Single source of truth. `private(set) var` so the Settings pane can
-    /// reload it live; in-process consumers read this (or derive from it) rather
-    /// than caching copies, so a reload propagates for free.
-    static private(set) var shared = Config.load()
+    /// Single source of truth. In-process consumers read this (or derive from
+    /// it) rather than caching copies, so a reload propagates for free.
+    /// Lock-protected: the main thread replaces it on a Settings change while
+    /// background work (audio, transcription) reads it — an unguarded
+    /// read-during-replace is a data race.
+    static var shared: Config {
+        sharedLock.lock(); defer { sharedLock.unlock() }
+        return _shared
+    }
+    private static let sharedLock = NSLock()
+    private static var _shared = Config.load()
 
     /// Re-read config.yaml after the Settings pane writes it. Light settings
     /// apply instantly because consumers read Config.shared directly; only the
     /// external whisper-server process needs an explicit restart.
-    static func reload() { shared = load() }
+    static func reload() {
+        let fresh = load() // outside the lock — load() logs and touches disk
+        sharedLock.lock(); _shared = fresh; sharedLock.unlock()
+    }
+
+    // MARK: - Key registry
+
+    /// ONE table drives config.yaml parsing (`load`) and engine-restart
+    /// detection (`engineAffecting`). Adding a setting = a stored property, a
+    /// row here, and a control in SplashWindow — nothing else to keep in sync.
+    private enum Kind {
+        case string(WritableKeyPath<Config, String>)
+        case int(WritableKeyPath<Config, Int>)
+        case double(WritableKeyPath<Config, Double>)
+        case bool(WritableKeyPath<Config, Bool>)
+    }
+    private struct Key {
+        let name: String
+        let kind: Kind
+        /// True when the whisper-server process bakes this in at launch — a
+        /// change requires an engine restart.
+        let engine: Bool
+    }
+    private static let registry: [Key] = [
+        Key(name: "model", kind: .string(\.model), engine: true),
+        Key(name: "model_dir", kind: .string(\.modelDir), engine: true),
+        Key(name: "use_ane", kind: .bool(\.useANE), engine: true),
+        Key(name: "server_port", kind: .int(\.serverPort), engine: true),
+        Key(name: "server_args", kind: .string(\.serverArgs), engine: true),
+        Key(name: "log_level", kind: .string(\.logLevel), engine: false),
+        Key(name: "double_tap_window_ms", kind: .int(\.doubleTapWindowMs), engine: false),
+        Key(name: "tap_max_ms", kind: .int(\.tapMaxMs), engine: false),
+        Key(name: "hold_release_ms", kind: .int(\.holdReleaseMs), engine: false),
+        Key(name: "hotkey_keycode", kind: .int(\.hotkeyKeycode), engine: false),
+        Key(name: "sounds", kind: .bool(\.sounds), engine: false),
+        Key(name: "paste_mode", kind: .string(\.pasteMode), engine: false),
+        Key(name: "type_into_terminals", kind: .bool(\.typeIntoTerminals), engine: false),
+        Key(name: "restore_clipboard", kind: .bool(\.restoreClipboard), engine: false),
+        Key(name: "voice_commands", kind: .bool(\.voiceCommands), engine: true), // primer is part of the server prompt
+        Key(name: "show_whisper_response", kind: .bool(\.showWhisperResponse), engine: false),
+        Key(name: "keep_recordings", kind: .bool(\.keepRecordings), engine: false),
+        Key(name: "min_speech_dbfs", kind: .double(\.minSpeechDBFS), engine: false),
+        Key(name: "prune_dead_audio", kind: .bool(\.pruneDeadAudio), engine: false),
+        Key(name: "check_for_updates", kind: .bool(\.checkForUpdates), engine: false),
+    ]
+    private static let registryByName = Dictionary(uniqueKeysWithValues: registry.map { ($0.name, $0) })
+
+    /// The canonical string rendering of a key's value (for change comparisons).
+    private static func valueString(_ key: Key, of config: Config) -> String {
+        switch key.kind {
+        case .string(let kp): return config[keyPath: kp]
+        case .int(let kp):    return String(config[keyPath: kp])
+        case .double(let kp): return String(config[keyPath: kp])
+        case .bool(let kp):   return config[keyPath: kp] ? "true" : "false"
+        }
+    }
+
+    /// Would applying `values` change a setting the whisper-server bakes in at
+    /// launch? Drives the restart decision in applySettings.
+    static func engineAffecting(_ values: [String: String], comparedTo old: Config) -> Bool {
+        registry.contains { key in
+            key.engine && values[key.name].map { $0 != valueString(key, of: old) } == true
+        }
+    }
 
     // MARK: - Run mode
 
@@ -63,7 +133,9 @@ struct Config {
     }()
 
     /// The dev checkout root: walk up from the bundle to the dir containing
-    /// `whisper.cpp/`. Falls back to ~/code/2026/Shoum. Only meaningful in dev mode.
+    /// `whisper.cpp/`. Only meaningful in dev mode; failing to find it means the
+    /// dev build is running from somewhere unexpected — fail fast in dev, fall
+    /// back to a last-resort guess in release.
     private static let cloneRoot: String = {
         var dir = Bundle.main.bundlePath as NSString
         for _ in 0..<8 {
@@ -72,6 +144,7 @@ struct Config {
                 return dir as String
             }
         }
+        softAssert(false, "[Config] dev mode but no clone root found above \(Bundle.main.bundlePath)")
         return NSString(string: "~/code/2026/Shoum").expandingTildeInPath
     }()
 
@@ -139,6 +212,28 @@ struct Config {
 
     static var modelPath: String {
         (modelsDir as NSString).appendingPathComponent("ggml-\(shared.model).bin")
+    }
+
+    /// Whisper models actually present on this machine (install.sh / manual
+    /// staging put them there) — drives the Settings model dropdown, so a model
+    /// can only be *selected*, never mistyped. Scans the shared store, a
+    /// model_dir override, and (dev) the clone's whisper.cpp/models; excludes
+    /// the Silero VAD net and ANE encoders.
+    static var availableModels: [String] {
+        var dirs = [canonicalModelStore]
+        let override = shared.modelDir.trimmingCharacters(in: .whitespaces)
+        if !override.isEmpty { dirs = [(override as NSString).expandingTildeInPath] }
+        if !isInstalled { dirs.append(resourcePath("whisper.cpp/models")) }
+
+        var names = Set<String>()
+        for dir in dirs {
+            for file in (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? [] {
+                guard file.hasPrefix("ggml-"), file.hasSuffix(".bin"),
+                      !file.contains("silero"), !file.contains("encoder") else { continue }
+                names.insert(String(file.dropFirst("ggml-".count).dropLast(".bin".count)))
+            }
+        }
+        return names.sorted()
     }
 
     static var encoderPath: String {
@@ -281,6 +376,30 @@ struct Config {
             return config
         }
 
+        // Malformed values fall back to the default, but NEVER silently — a
+        // typo'd port would otherwise run on 8178 while the file (and Settings
+        // pane) show something else, with nothing connecting the two.
+        func intValue(_ raw: String, _ key: String, _ fallback: Int) -> Int {
+            if let v = Int(raw) { return v }
+            Log.error("[Config] bad value '\(raw)' for \(key) — using \(fallback)")
+            return fallback
+        }
+        func doubleValue(_ raw: String, _ key: String, _ fallback: Double) -> Double {
+            if let v = Double(raw) { return v }
+            Log.error("[Config] bad value '\(raw)' for \(key) — using \(fallback)")
+            return fallback
+        }
+        func boolValue(_ raw: String, _ key: String, _ fallback: Bool) -> Bool {
+            switch raw {
+            case "true": return true
+            case "false": return false
+            default:
+                Log.error("[Config] bad value '\(raw)' for \(key) (expected true/false) — using \(fallback)")
+                return fallback
+            }
+        }
+
+        var seenKeys = Set<String>()
         for rawLine in text.components(separatedBy: .newlines) {
             // Strip comments (no # is legal inside our values) and whitespace
             let line = rawLine.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)[0]
@@ -294,29 +413,22 @@ struct Config {
             let key = String(line[..<colon]).trimmingCharacters(in: .whitespaces)
             let value = String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
 
-            switch key {
-            case "model": config.model = value
-            case "model_dir": config.modelDir = value
-            case "log_level": config.logLevel = value
-            case "use_ane": config.useANE = (value == "true")
-            case "server_port": config.serverPort = Int(value) ?? config.serverPort
-            case "server_args": config.serverArgs = value
-            case "double_tap_window_ms": config.doubleTapWindowMs = Int(value) ?? config.doubleTapWindowMs
-            case "tap_max_ms": config.tapMaxMs = Int(value) ?? config.tapMaxMs
-            case "hold_release_ms": config.holdReleaseMs = Int(value) ?? config.holdReleaseMs
-            case "hotkey_keycode": config.hotkeyKeycode = Int(value) ?? config.hotkeyKeycode
-            case "sounds": config.sounds = (value == "true")
-            case "paste_mode": config.pasteMode = value
-            case "type_into_terminals": config.typeIntoTerminals = (value == "true")
-            case "restore_clipboard": config.restoreClipboard = (value == "true")
-            case "voice_commands": config.voiceCommands = (value == "true")
-            case "show_whisper_response": config.showWhisperResponse = (value == "true")
-            case "keep_recordings": config.keepRecordings = (value == "true")
-            case "min_speech_dbfs": config.minSpeechDBFS = Double(value) ?? config.minSpeechDBFS
-            case "prune_dead_audio": config.pruneDeadAudio = (value == "true")
-            case "check_for_updates": config.checkForUpdates = (value == "true")
-            default:
+            // Duplicate keys are a trap: this loader honors the LAST occurrence,
+            // but the Settings pane's surgical writer edits the FIRST — so edits
+            // would silently not take. Warn so the user removes one.
+            if !seenKeys.insert(key).inserted {
+                Log.error("[Config] duplicate key '\(key)' — the last value wins, but Settings edits the first; remove one")
+            }
+
+            guard let spec = registryByName[key] else {
                 Log.info("[Config] unknown key '\(key)' - ignoring")
+                continue
+            }
+            switch spec.kind {
+            case .string(let kp): config[keyPath: kp] = value
+            case .int(let kp):    config[keyPath: kp] = intValue(value, key, config[keyPath: kp])
+            case .double(let kp): config[keyPath: kp] = doubleValue(value, key, config[keyPath: kp])
+            case .bool(let kp):   config[keyPath: kp] = boolValue(value, key, config[keyPath: kp])
             }
         }
 

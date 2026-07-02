@@ -20,6 +20,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 MODEL="medium.en"
+# whisper.cpp is PINNED: the app's VAD bridge (whisper_vad_* C API), the server's
+# HTTP behavior, and ReadinessChecker's server.log markers are all coupled to
+# this exact revision. An unpinned HEAD clone means a fresh install can break
+# while existing checkouts keep working. Bump deliberately: update the SHA, then
+# re-test install.sh end-to-end.
+WHISPER_COMMIT="200b1197907545a88c5a00fb15f52e2cf88af6f5"   # 2026-06-18, known good
 APP_NAME="Shoum"
 BUNDLE_ID="org.pipad.shoum"
 DEST_APP="/Applications/$APP_NAME.app"
@@ -119,9 +125,19 @@ fi
 say "whisper.cpp source + model"
 # ---------------------------------------------------------------------------
 if [ -d "$WHISPER_DIR" ]; then
-    echo "whisper.cpp present, skipping clone."
+    # Existing checkout (e.g. a dev clone): leave it alone, but say what it's at
+    # so a mismatch with the pin is visible rather than silent.
+    HAVE=$(git -C "$WHISPER_DIR" rev-parse HEAD 2>/dev/null || echo "unknown")
+    if [ "$HAVE" = "$WHISPER_COMMIT" ]; then
+        echo "whisper.cpp present at the pinned commit, skipping clone."
+    else
+        echo "whisper.cpp present at $HAVE (pin is $WHISPER_COMMIT) — using it as-is."
+    fi
 else
     git clone https://github.com/ggml-org/whisper.cpp.git "$WHISPER_DIR"
+    git -C "$WHISPER_DIR" checkout --quiet "$WHISPER_COMMIT" \
+        || die "could not check out pinned whisper.cpp commit $WHISPER_COMMIT"
+    echo "whisper.cpp pinned to $WHISPER_COMMIT."
 fi
 
 cd "$WHISPER_DIR"
@@ -236,7 +252,7 @@ elif [ -f "$VAD_SRC" ]; then
     cp "$VAD_SRC" "$STORE/ggml-silero-v6.2.0.bin"
     echo "Staged Silero VAD model into the shared store."
 else
-    echo "⚠️  Silero VAD model not found at $VAD_SRC — the app will fall back to the energy gate."
+    echo "⚠️  Silero VAD model not found at $VAD_SRC — VAD will be unavailable (no silence culling; the spectrogram renders grey)."
 fi
 echo "Model assets in shared store: $STORE"
 
