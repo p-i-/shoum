@@ -18,6 +18,41 @@ The entire interface is the **left shift key**:
 Normal shift use (capitals, shift-click) never triggers anything: any
 intervening keystroke cancels the gesture.
 
+## In action
+
+Menu-bar app. The **Status** tab shows every dependency green — permissions, the
+model on the Neural Engine, and a real transcription round-trip — so you know it
+actually works, not just that it launched:
+
+![Shoum's menu and the all-green Status window](docs/1-status.png)
+
+Double-tap ⇧ and say *"The quick brown fox."* It lands in a private floating box
+over your app — **not** in the app itself. Your target stays untouched:
+
+![Dictating the first phrase into the box](docs/2-dictating.png)
+
+Here's the point: **that box is a real editor you drive with whatever mix of
+voice and hands you like, before a single character reaches your app.**
+Double-click **fox** to select it (mouse), double-tap ⇧ and say *"badger"*
+(voice) — the selection is replaced:
+
+![Selecting a word and replacing it by voice: fox becomes badger](docs/3-segments.png)
+
+Then click after **badger** and double-tap the **left** ⇧ — a 🎙️ appears at the
+cursor to mark where the next words will land — then keep talking, *"jumps over
+the lazy dog"*…
+
+![The live marker showing where the next words will be inserted](docs/4-live.png)
+
+…which splices straight in, spacing and punctuation fixed at the seam:
+
+![The dictated phrase spliced into the sentence](docs/5-spliced.png)
+
+Only when you're happy, single-tap ⇧ — and *now* the finished sentence is pasted
+into the app you started in:
+
+![The finished sentence pasted into the target app](docs/6-pasted.png)
+
 ## Why not just use macOS dictation (or Claude Code's voice input)?
 
 **macOS built-in dictation** types into whatever control is focused, and three
